@@ -104,7 +104,3 @@ function generateMonatswerte() {
 
   Logger.log("✅ Monatswerte korrekt geschrieben: " + (output.length - 1));
 }
-
-function round2(n) {
-  return Math.round((Number(n) || 0) * 100) / 100;
-}

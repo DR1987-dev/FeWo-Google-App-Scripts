@@ -1,6 +1,22 @@
 function generateAlleBuchungenPlan() {
- 
+
   // Hilfsfunktionen
+
+  function requireSheet(ss, name) {
+    const sheet = ss.getSheetByName(name);
+    if (!sheet) {
+      throw new Error(`❌ Sheet '${name}' nicht gefunden`);
+    }
+    return sheet;
+  }
+
+  function ensureDate(value, fieldName) {
+    const d = new Date(value);
+    if (isNaN(d.getTime())) {
+      throw new Error(`❌ Ungültiges Datum in Feld '${fieldName}': ${value}`);
+    }
+    return d;
+  }
 
   function num(v) {
     const n = Number(v);
@@ -80,20 +96,23 @@ function generateAlleBuchungenPlan() {
 
     return kandidaten[0];
   }
- 
+
   const ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) {
+    throw new Error("❌ Kein aktives Spreadsheet verfügbar");
+  }
 
   // Sheets
-  const sheetFixkosten = ss.getSheetByName("Fixkosten");
-  const sheetImport = ss.getSheetByName("Import");
-  const sheetImportZuordnung = ss.getSheetByName("Import_Konto_Zuordnung");
-  const sheetManuelle = ss.getSheetByName("Manuelle_Buchungen");
-  const sheetKontostart = ss.getSheetByName("Kontostartwerte");
-  const sheetUmbuchungen = ss.getSheetByName("Umbuchungen");
-  const sheetOutput = ss.getSheetByName("AlleBuchungenPlan");
+  const sheetFixkosten = requireSheet(ss, "Fixkosten");
+  const sheetImport = requireSheet(ss, "Import");
+  const sheetImportZuordnung = requireSheet(ss, "Import_Konto_Zuordnung");
+  const sheetManuelle = requireSheet(ss, "Manuelle_Buchungen");
+  const sheetKontostart = requireSheet(ss, "Kontostartwerte");
+  const sheetUmbuchungen = requireSheet(ss, "Umbuchungen");
+  const sheetOutput = requireSheet(ss, "AlleBuchungenPlan");
 
   sheetOutput.clearContents();
-  sheetOutput.appendRow(["Kostenart","Buchungskonto","Datum","Betrag","Kumuliert","Monatsstartwert","Monatsendwert"]);
+  sheetOutput.appendRow(["Kostenart", "Buchungskonto", "Datum", "Betrag", "Kumuliert", "Monatsstartwert", "Monatsendwert"]);
 
   // -------------------------------
   // 1️⃣ Fixkosten laden
@@ -116,7 +135,10 @@ function generateAlleBuchungenPlan() {
   const importZuordnungData = sheetImportZuordnung.getDataRange().getValues().slice(1);
   const importZuordnung = {};
   importZuordnungData.forEach(r => {
-    const key = `${new Date(r[0]).toISOString().slice(0,10)}|${r[1]}`;
+    if (!r[0] || !r[1] || !r[2]) return;
+    const importZuordnungsDatum = new Date(r[0]);
+    if (isNaN(importZuordnungsDatum.getTime())) return;
+    const key = buildDateTextKey(importZuordnungsDatum, r[1]);
     importZuordnung[key] = r[2];
     Logger.log(`🔧 Importzuordnung geladen: ${key} → ${r[2]}`);
   });
@@ -148,7 +170,7 @@ function generateAlleBuchungenPlan() {
 
   const importBuchungen = importData.map((r, i) => {
     const buchungstext = r[4];
-    const datum = new Date(r[3]);
+    const datum = ensureDate(r[3], `Import.Datum Zeile ${i + 2}`);
 
     const soll = Number(r[9]);   // Soll (Ausgabe)
     const haben = Number(r[10]); // Haben (Einnahme)
@@ -192,7 +214,8 @@ function generateAlleBuchungenPlan() {
 
   // 7a️⃣ Import Buchungen verarbeiten
   importBuchungen.forEach(imp => {
-    if (imp.Buchungstext.toLowerCase().includes("saldovortrag")) {
+    const buchungstextLower = String(imp.Buchungstext || "").toLowerCase();
+    if (buchungstextLower.includes("saldovortrag")) {
       Logger.log(`❌ Fiktiver Saldovortrag ignoriert: ${imp.Buchungstext}`);
       return;
     }
@@ -211,7 +234,7 @@ function generateAlleBuchungenPlan() {
     }
 
     // 2️⃣ Exakte Import-Zuordnung überschreibt Fixkosten
-    const key = `${imp.Datum.toISOString().slice(0,10)}|${imp.Buchungstext}`;
+    const key = buildDateTextKey(imp.Datum, imp.Buchungstext);
     if (importZuordnung[key]) {
       konto = importZuordnung[key];
       Logger.log(
@@ -243,19 +266,19 @@ function generateAlleBuchungenPlan() {
 
   // 7c️⃣ Fixkosten Forecast
   const today = new Date();
-  const forecastEnd = new Date(today.getFullYear()+2, today.getMonth(), today.getDate());
+  const forecastEnd = new Date(today.getFullYear() + 2, today.getMonth(), today.getDate());
   fixkosten.forEach(f => {
     if (!f.Startdatum) return;
     let d = new Date(f.Startdatum);
-    while(d <= forecastEnd && (!f.Enddatum || d <= f.Enddatum)) {
+    while (d <= forecastEnd && (!f.Enddatum || d <= f.Enddatum)) {
       // Prüfen, ob schon ein Import existiert ±3 Tage
       let matchImport = alleBuchungen.find(a =>
         a.Kostenart === f.BuchungstextAbgleich &&
-        Math.abs((a.Datum - d)/(1000*60*60*24)) <= 3
+        Math.abs((a.Datum - d) / (1000 * 60 * 60 * 24)) <= 3
       );
       if (!matchImport) {
         let werttag = new Date(d);
-        if(f.Wertstellungstag) werttag.setDate(f.Wertstellungstag);
+        if (f.Wertstellungstag) werttag.setDate(f.Wertstellungstag);
         alleBuchungen.push({
           Kostenart: f.Kostenart,
           Buchungskonto: f.Buchungskonto,
@@ -267,9 +290,10 @@ function generateAlleBuchungenPlan() {
       }
 
       // Intervall erhöhen
-      if(f.Intervall.toLowerCase() === "monat") d.setMonth(d.getMonth()+1);
-      else if(f.Intervall.toLowerCase() === "quartal") d.setMonth(d.getMonth()+3);
-      else if(f.Intervall.toLowerCase() === "jahr") d.setFullYear(d.getFullYear()+1);
+      const intervall = String(f.Intervall || "").toLowerCase();
+      if (intervall === "monat") d.setMonth(d.getMonth() + 1);
+      else if (intervall === "quartal") d.setMonth(d.getMonth() + 3);
+      else if (intervall === "jahr") d.setFullYear(d.getFullYear() + 1);
       else break;
     }
   });
@@ -295,25 +319,26 @@ function generateAlleBuchungenPlan() {
 
   // -------------------------------
   // 8️⃣ Sortieren nach Datum
-  alleBuchungen.sort((a,b)=>a.Datum-b.Datum);
+  alleBuchungen.sort((a, b) => a.Datum - b.Datum);
 
   // -------------------------------
   // 9️⃣ Kumuliert, Monatsstartwert, Monatsendwert berechnen
-  const kontenKumuliert = {...kontenStand};
+  const kontenKumuliert = { ...kontenStand };
   const kontenMonatStart = {};
   let currentMonth = null;
+  const outputRows = [];
 
   alleBuchungen.forEach(b => {
     let m = `${b.Datum.getFullYear()}-${b.Datum.getMonth()}`;
-    if(currentMonth !== m) {
+    if (currentMonth !== m) {
       currentMonth = m;
-      for(const k in kontenKumuliert) kontenMonatStart[k] = kontenKumuliert[k];
+      for (const k in kontenKumuliert) kontenMonatStart[k] = kontenKumuliert[k];
       Logger.log(`📆 Neuer Monat: ${m}, Monatsstartwerte: ${JSON.stringify(kontenMonatStart)}`);
     }
 
-    kontenKumuliert[b.Buchungskonto] = (kontenKumuliert[b.Buchungskonto]||0) + b.Betrag;
+    kontenKumuliert[b.Buchungskonto] = (kontenKumuliert[b.Buchungskonto] || 0) + b.Betrag;
 
-    sheetOutput.appendRow([
+    outputRows.push([
       b.Kostenart,
       b.Buchungskonto,
       Utilities.formatDate(b.Datum, Session.getScriptTimeZone(), "yyyy-MM-dd"),
@@ -325,6 +350,12 @@ function generateAlleBuchungenPlan() {
 
     Logger.log(`✅ Buchung geschrieben: ${b.Kostenart}, ${b.Buchungskonto}, ${b.Betrag}, Quelle: ${b.Quelle}`);
   });
+
+  if (outputRows.length > 0) {
+    sheetOutput
+      .getRange(2, 1, outputRows.length, outputRows[0].length)
+      .setValues(outputRows);
+  }
 
   Logger.log("🎉 Alle Buchungen generiert!");
 }

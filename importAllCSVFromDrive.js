@@ -1,5 +1,10 @@
 function importAllCSVFromDrive() {
-  var folder = DriveApp.getFoldersByName("EÜR Exporte").next();
+  var folderIterator = DriveApp.getFoldersByName("EÜR Exporte");
+  if (!folderIterator.hasNext()) {
+    throw new Error("❌ Drive-Ordner 'EÜR Exporte' nicht gefunden");
+  }
+
+  var folder = folderIterator.next();
   var files = folder.getFiles();
 
   var latestFilePerYear = {}; // { "25": {date: "20251231", file: File} }
@@ -53,6 +58,10 @@ function importAllCSVFromDrive() {
 
     var csvContent = file.getBlob().getDataAsString();
     var csvData = Utilities.parseCsv(csvContent, ';');
+    if (!csvData || csvData.length === 0) {
+      Logger.log("⏭️  Übersprungen (CSV ohne Inhalt): " + name);
+      continue;
+    }
 
     if (!header) {
       header = csvData[0];
@@ -61,16 +70,24 @@ function importAllCSVFromDrive() {
 
     var rows = csvData.slice(1);
 
-    rows.forEach(function(row) {
+    rows.forEach(function (row) {
+      if (!row || row.length < 11) {
+        Logger.log("⚠️ Übersprungen (zu wenige Spalten) in Datei: " + name);
+        return;
+      }
+
       // 📅 Datumsspalten C & D
       row[2] = convertGermanDate(row[2]);
       row[3] = convertGermanDate(row[3]);
 
       // 💶 Betragsspalten J & K
-      row[9]  = convertEuroNumber(row[9]);
+      row[9] = convertEuroNumber(row[9]);
       row[10] = convertEuroNumber(row[10]);
 
       allData.push(row);
+      if (yearCount[year] === undefined) {
+        yearCount[year] = 0;
+      }
       yearCount[year]++;
     });
 
@@ -93,10 +110,12 @@ function importAllCSVFromDrive() {
   // 📊 Abschluss-Log
   Logger.log("📊 Import abgeschlossen");
   Logger.log("➡️  Gesamtzeilen (ohne Header): " + (allData.length - 1));
-  Logger.log("➡️  Jahr 2024: " + yearCount["24"] + " Zeilen");
-  Logger.log("➡️  Jahr 2025: " + yearCount["25"] + " Zeilen");
-  Logger.log("➡️  Jahr 2026: " + yearCount["26"] + " Zeilen");
-  Logger.log("➡️  Jahr 2027: " + yearCount["27"] + " Zeilen");
+
+  Object.keys(yearCount)
+    .sort()
+    .forEach(function (y) {
+      Logger.log("➡️  Jahr 20" + y + ": " + yearCount[y] + " Zeilen");
+    });
 }
 
 /* ===============================

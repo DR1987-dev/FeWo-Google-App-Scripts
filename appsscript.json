@@ -1,5 +1,8 @@
 {
   "timeZone": "Europe/Berlin",
+  "executionApi": {
+    "access": "DOMAIN"
+  },
   "dependencies": {
   },
   "exceptionLogging": "STACKDRIVER",
