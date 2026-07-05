@@ -95,6 +95,30 @@ function doPost(e) {
             });
         }
 
+        if (action === "lodgifyAuthDiag") {
+            var diag = diagnoseLodgifyAuthModes(payload.path, payload.queryParams || {});
+            return jsonResponse_(200, {
+                ok: true,
+                result: diag
+            });
+        }
+
+        if (action === "importLodgifyEinnahmen") {
+            var importResult = importLodgifyEinnahmenToImport(payload.queryParams || {});
+            return jsonResponse_(200, {
+                ok: true,
+                result: importResult
+            });
+        }
+
+        if (action === "lodgifyAudit") {
+            var auditResult = auditLodgifyBookingsToSheet(payload.queryParams || {});
+            return jsonResponse_(200, {
+                ok: true,
+                result: auditResult
+            });
+        }
+
         return jsonResponse_(400, {
             ok: false,
             error: "Unknown action"
@@ -155,6 +179,35 @@ function handleGetAction_(e) {
         return jsonResponse_(200, {
             ok: true,
             result: reservations
+        });
+    }
+
+    if (action === "lodgifyAudit") {
+        var auditParams = {
+            page: toNumberOrUndefined_(e && e.parameter ? e.parameter.page : undefined),
+            size: toNumberOrUndefined_(e && e.parameter ? e.parameter.size : undefined),
+            excludeDeclinedCancelled: e && e.parameter ? e.parameter.excludeDeclinedCancelled : undefined
+        };
+
+        var auditResultGet = auditLodgifyBookingsToSheet(auditParams);
+        return jsonResponse_(200, {
+            ok: true,
+            result: auditResultGet
+        });
+    }
+
+    if (action === "lodgifyAuthDiag") {
+        var path = e && e.parameter ? e.parameter.path : undefined;
+        var queryParams = {
+            page: toNumberOrUndefined_(e && e.parameter ? e.parameter.page : undefined),
+            size: toNumberOrUndefined_(e && e.parameter ? e.parameter.size : undefined),
+            includeCanceled: e && e.parameter ? e.parameter.includeCanceled : undefined
+        };
+
+        var diagResult = diagnoseLodgifyAuthModes(path, queryParams);
+        return jsonResponse_(200, {
+            ok: true,
+            result: diagResult
         });
     }
 
