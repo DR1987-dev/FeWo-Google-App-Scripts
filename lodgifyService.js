@@ -129,11 +129,28 @@ function lodgifyRequest(path, options) {
 }
 
 function lodgifyGetBookings(queryParams) {
-    const config = getLodgifyConfig();
-    return lodgifyRequest(config.bookingsPath, {
-        method: "get",
-        queryParams: queryParams || {}
-    });
+
+  const response = lodgifyRequest("/v2/reservations/bookings", {
+    method: "get",
+    queryParams: Object.assign({
+      page: 1,
+      size: 50,
+      includeCount: true,
+      includeTransactions: true,
+      includeQuoteDetails: true,
+      includeExternal: true,
+      stayFilter: "All",
+      trash: "All"
+    }, queryParams || {})
+  });
+
+  Logger.log("========== REQUEST ==========");
+  Logger.log(JSON.stringify(queryParams || {}, null, 2));
+
+  Logger.log("========== RESPONSE ==========");
+  Logger.log(JSON.stringify(response.body, null, 2));
+
+  return response;
 }
 
 function lodgifyGetReservations(queryParams) {
