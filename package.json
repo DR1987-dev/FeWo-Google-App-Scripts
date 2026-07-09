@@ -3,7 +3,24 @@
   "type": "module",
   "dependencies": {
     "@google-cloud/local-auth": "^3.0.1",
-    "googleapis": "^140.0.0",
-    "glob": "^11.0.0"
-  }
+    "glob": "^11.1.0",
+    "googleapis": "^140.0.1"
+  },
+  "version": "1.0.0",
+  "description": "",
+  "main": "api.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DR1987-dev/FeWo-Google-App-Scripts.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/DR1987-dev/FeWo-Google-App-Scripts/issues"
+  },
+  "homepage": "https://github.com/DR1987-dev/FeWo-Google-App-Scripts#readme"
 }
