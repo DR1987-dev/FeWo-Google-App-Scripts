@@ -82,17 +82,30 @@ async function main() {
 }
 
 async function createAuth() {
-    const credentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS || path.resolve(PROJECT_ROOT, "credentials.json");
+    const credentialsPath =
+        process.env.GOOGLE_APPLICATION_CREDENTIALS ||
+        path.resolve(PROJECT_ROOT, "credentials.json");
 
-    const auth = new google.auth.GoogleAuth({
-        keyFile: credentialsPath,
+    const credentials = JSON.parse(
+        await fs.readFile(credentialsPath, "utf8")
+    );
+
+    const auth = new google.auth.JWT({
+        email: credentials.client_email,
+        key: credentials.private_key,
+
+        // <-- GANZ WICHTIG
+        subject: "d.rybosch@davidsapartment.com",
+
         scopes: [
             "https://www.googleapis.com/auth/script.projects",
             "https://www.googleapis.com/auth/script.deployments",
-        ],
+            "https://www.googleapis.com/auth/drive"
+        ]
     });
 
-    await auth.getClient();
+    await auth.authorize();
+
     return auth;
 }
 
