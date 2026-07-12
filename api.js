@@ -119,6 +119,14 @@ function doPost(e) {
             });
         }
 
+        if (action === "processPaymentRequests") {
+            var prResult = processLodgifyPaymentRequestUpdates(payload.queryParams || {});
+            return jsonResponse_(200, {
+                ok: true,
+                result: prResult
+            });
+        }
+
         if (action === "createExpense") {
             var createdExpense = createExpenseRow_(payload.expense || payload.data || {});
             return jsonResponse_(200, {
@@ -261,6 +269,13 @@ function handleGetAction_(e) {
         return jsonResponse_(200, {
             ok: true,
             result: auditResultGet
+        });
+    }
+
+    if (action === "getAlleBuchungen") {
+        return jsonResponse_(200, {
+            ok: true,
+            result: readSheetObjects_("AlleBuchungen")
         });
     }
 
