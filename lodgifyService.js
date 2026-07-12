@@ -149,11 +149,10 @@ function lodgifyGetBookings(queryParams) {
       page: 1,
       size: 50,
       includeCount: true,
-      includeTransactions: true,
-      includeQuoteDetails: true,
-      includeExternal: true,
       stayFilter: "All",
-      trash: "All"
+      includeTransactions: false,
+      includeExternal: true,
+      includeQuoteDetails: true
     }, queryParams || {})
   });
 
@@ -429,6 +428,11 @@ function fetchBookingsWithCloudFallback_(queryParams) {
         }
     });
     baseParams.includeCanceled = "false";
+    if (baseParams.includeCount === undefined) baseParams.includeCount = true;
+    if (baseParams.stayFilter === undefined) baseParams.stayFilter = "All";
+    if (baseParams.includeTransactions === undefined) baseParams.includeTransactions = false;
+    if (baseParams.includeExternal === undefined) baseParams.includeExternal = true;
+    if (baseParams.includeQuoteDetails === undefined) baseParams.includeQuoteDetails = true;
     if (config.propertyId) {
         baseParams.propertyId = config.propertyId;
     }
@@ -769,7 +773,7 @@ function extractAmountForAudit_(item) {
     const resolvedAmountValue = amountValue !== null && amountValue !== undefined && amountValue !== ""
         ? amountValue
         : nestedAmount;
-    const amount = toNumberOrZero(resolvedAmountValue);
+    const amount = resolveAmountObject_(resolvedAmountValue);
     return amount > 0 ? amount : 0;
 }
 
@@ -981,7 +985,7 @@ function mapLodgifyItemToImportRowDetailed_(item) {
     const resolvedAmountValue = amountValue !== null && amountValue !== undefined && amountValue !== ""
         ? amountValue
         : nestedAmount;
-    const amount = toNumberOrZero(resolvedAmountValue);
+    const amount = resolveAmountObject_(resolvedAmountValue);
     const finalAmount = amount > 0 ? amount : 0;
 
     const id = firstDefined(item, ["id", "bookingId", "reservationId"]) || "Lodgify";
@@ -1205,6 +1209,20 @@ function toNumberOrZero(value) {
 
     const n = Number(normalized);
     return isNaN(n) ? 0 : n;
+}
+
+function resolveAmountObject_(value) {
+    if (value === null || value === undefined || value === "") return 0;
+    if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+    if (typeof value === "string") return toNumberOrZero(value);
+    // v2 Lodgify amount objects: { "amount": 123.45, "currency": "EUR" }
+    if (typeof value === "object" && !Array.isArray(value)) {
+        const inner = firstDefined(value, ["amount", "value", "gross", "net", "total"]);
+        if (inner !== null && inner !== undefined) {
+            return resolveAmountObject_(inner);
+        }
+    }
+    return 0;
 }
 
 function buildImportDedupKey(dateValue, textValue, habenValue) {
