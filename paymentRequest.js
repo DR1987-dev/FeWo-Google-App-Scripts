@@ -5,7 +5,7 @@
 // 1. Alle Lodgify-Buchungen werden in das Sheet "AlleBuchungen" (konfigurierbar)
 //    eingepflegt/aktualisiert.
 // 2. Die Spalte "ZahlungsAufforderungAktiv" kann manuell auf TRUE gesetzt werden.
-// 3. Beim nächsten Lodgify-Import: Wenn der Kenner gesetzt ist UND wir uns im
+// 3. Beim nächsten Lodgify-Import: Wenn das Kennzeichen gesetzt ist UND wir uns im
 //    konfigurierten Zeitfenster vor CheckIn befinden, werden die Zahlungsfelder
 //    (PaymentOption, RequestFullPayment, …) aus den Lodgify-Daten übernommen.
 //
