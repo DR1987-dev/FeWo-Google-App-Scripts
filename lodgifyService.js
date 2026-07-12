@@ -312,6 +312,26 @@ function importLodgifyEinnahmenToImport(queryParams) {
     Logger.log(`Lodgify year summary raw: ${JSON.stringify(yearSummaryRaw)}`);
     Logger.log(`Lodgify year summary confirmedUnique: ${JSON.stringify(yearSummaryConfirmed)}`);
 
+    // Zahlungsaufforderung: AlleBuchungen-Sheet befüllen und Zahlungsupdates anwenden.
+    // Fehler werden abgefangen, damit der Finance-Import nicht abbricht.
+    let paymentRequestResult = null;
+    try {
+        const prConfig = getPaymentRequestConfig_();
+        upsertAlleBuchungenFromItems_(prConfig.sheetName, allItems);
+
+        const itemsById = {};
+        allItems.forEach(item => {
+            const id = String(
+                firstDefined(item, ["id", "bookingId", "booking_id", "reservationId", "reservation_id"]) || ""
+            ).trim();
+            if (id) itemsById[id] = item;
+        });
+
+        paymentRequestResult = applyPaymentRequestUpdates_(prConfig.sheetName, itemsById, prConfig);
+    } catch (prErr) {
+        Logger.log(`⚠️ Zahlungsaufforderungs-Update fehlgeschlagen: ${String(prErr && prErr.message ? prErr.message : prErr)}`);
+    }
+
     return {
         ok: true,
         sheet: targetSheetName,
@@ -341,7 +361,8 @@ function importLodgifyEinnahmenToImport(queryParams) {
             reservationsFetched: reservationsResult.items.length,
             bookingsWarning: bookingsResult.warning || null,
             reservationsWarning: reservationsResult.warning || null
-        }
+        },
+        paymentRequests: paymentRequestResult
     };
 }
 
