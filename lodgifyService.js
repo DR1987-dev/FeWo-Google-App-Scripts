@@ -107,15 +107,28 @@ function lodgifyRequest(path, options) {
 
     const url = lodgifyBuildUrl(path, requestOptions.queryParams);
     const response = UrlFetchApp.fetch(url, fetchOptions);
-    const status = response.getResponseCode();
-    const bodyText = response.getContentText() || "";
 
-    let body;
-    try {
-        body = bodyText ? JSON.parse(bodyText) : null;
-    } catch (e) {
-        body = bodyText;
-    }
+// ===== DEBUG START =====
+Logger.log("===== LODGIFY REQUEST =====");
+Logger.log("URL: " + url);
+Logger.log("Status: " + response.getResponseCode());
+
+Logger.log("===== HEADERS =====");
+Logger.log(JSON.stringify(response.getAllHeaders(), null, 2));
+
+Logger.log("===== BODY =====");
+Logger.log(response.getContentText());
+// ===== DEBUG END =====
+
+const status = response.getResponseCode();
+const bodyText = response.getContentText() || "";
+
+let body;
+try {
+    body = bodyText ? JSON.parse(bodyText) : null;
+} catch (e) {
+    body = bodyText;
+}
 
     if (status < 200 || status >= 300) {
         throw new Error(`Lodgify request failed (${status}) for ${url}: ${bodyText}`);
