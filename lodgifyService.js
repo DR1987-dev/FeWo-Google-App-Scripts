@@ -1215,7 +1215,9 @@ function resolveAmountObject_(value) {
     if (value === null || value === undefined || value === "") return 0;
     if (typeof value === "number") return Number.isFinite(value) ? value : 0;
     if (typeof value === "string") return toNumberOrZero(value);
-    // v2 Lodgify amount objects: { "amount": 123.45, "currency": "EUR" }
+    // v2 Lodgify amount objects can use various shapes, e.g.
+    // { "amount": 123.45, "currency": "EUR" } or { "value": 123.45 }
+    // Additional field names are included defensively for non-standard variants.
     if (typeof value === "object" && !Array.isArray(value)) {
         const inner = firstDefined(value, ["amount", "value", "gross", "net", "total"]);
         if (inner !== null && inner !== undefined) {
