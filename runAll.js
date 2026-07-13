@@ -3,6 +3,7 @@ function runAll() {
     importAllCSVFromDrive();
     generateAlleBuchungenPlan();
     generateMonatswerte();
+    importLodgifyEinnahmenToImport();
     Logger.log("✅ Alle Skripte erfolgreich ausgeführt");
   } catch (e) {
     Logger.log("❌ Abbruch wegen Fehler: " + e.message);
