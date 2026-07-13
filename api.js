@@ -635,7 +635,7 @@ function updateEditableBooking_(booking) {
 
     if (kind === "lodgify" || kind === "lodgify_external") {
         if (parts.length < 3) {
-            throw new Error("Lodgify booking.id ist ungueltig");
+            throw new Error("Lodgify booking.id ist ungueltig. Erwartetes Format: lodgify:<ENCODED_SHEET_NAME>:<ROW_NUMBER>");
         }
         rowNo = Number(parts[parts.length - 1]);
         encodedSheetName = parts.slice(1, parts.length - 1).join(":");
