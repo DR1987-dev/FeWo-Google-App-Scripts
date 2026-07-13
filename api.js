@@ -635,7 +635,7 @@ function updateEditableBooking_(booking) {
 
     if (kind === "lodgify" || kind === "lodgify_external") {
         if (parts.length < 3) {
-            throw new Error("Lodgify booking.id ist ungültig. Erwartetes Format: lodgify:<ENCODED_SHEET_NAME>:<ROW_NUMBER>");
+            throw new Error("Lodgify booking.id ist ungültig. Erwartetes Format: lodgify:<KODIERTER_TABELLENNAME>:<ZEILENNUMMER>");
         }
         rowNo = Number(parts[parts.length - 1]);
         encodedSheetName = parts.slice(1, parts.length - 1).join(":");
@@ -703,7 +703,7 @@ function updateEditableBooking_(booking) {
 
     if (kind === "lodgify" || kind === "lodgify_external") {
         if (typeof updateLodgifyEditableBookingRow_ !== "function") {
-            throw new Error("Lodgify-Buchungen können in diesem Deployment nicht bearbeitet werden.");
+            throw new Error("Lodgify-Buchungen können in dieser Bereitstellung nicht bearbeitet werden.");
         }
 
         var sheetName = encodedSheetName
