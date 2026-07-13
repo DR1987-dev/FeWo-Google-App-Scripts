@@ -177,7 +177,7 @@ function updateLodgifyBookingInSheet(sheetName, row, booking) {
             value: toBoolean(booking.is_external) ? "TRUE" : "FALSE",
         },
         {
-            headers: ["LodgifyBookingId", "BookingId", "BuchungsID"],
+            headers: ["LodgifyBookingId", "LodgifyBuchungsID", "BookingId", "BuchungsID"],
             value: String(booking.lodgify_booking_id || booking.id || ""),
         },
     ];
@@ -197,7 +197,6 @@ function ensureAlleBuchungenSheet_(sheetName) {
         sheet = ss.insertSheet(sheetName);
         sheet.getRange(1, 1, 1, ALLE_BUCHUNGEN_HEADERS_.length).setValues([ALLE_BUCHUNGEN_HEADERS_]);
         sheet.setFrozenRows(1);
-        return sheet;
     }
 
     const headerMap = getSheetHeaderMap_(sheet);
@@ -279,19 +278,8 @@ function extractLodgifyFeesTotal_(item) {
     ]);
 }
 
-function extractLodgifyPayoutAmount_(item) {
-    return extractAmountFromPaths_(item || {}, [
-        "payout", "payoutAmount", "ownerPayout", "hostPayout", "netAmount", "net"
-    ], [
-        "quote.payout", "quote.net", "quote.netAmount",
-        "reservation.payout", "reservation.net", "reservation.netAmount",
-        "financials.payout", "financials.net", "financials.netAmount",
-        "charges.payout", "invoice.net"
-    ]);
-}
-
 function buildLodgifyEditableBookingFromSheetRow_(sheetName, rowNo, row, headerMap) {
-    const bookingId = String(getRowValueByHeaders_(row, headerMap, ["LodgifyBookingId", "BookingId", "BuchungsID"], "") || "").trim();
+    const bookingId = String(getRowValueByHeaders_(row, headerMap, ["LodgifyBookingId", "LodgifyBuchungsID", "BookingId", "BuchungsID"], "") || "").trim();
     if (!bookingId) return null;
 
     const guestName = String(getRowValueByHeaders_(row, headerMap, ["GastName", "GuestName"], "") || "").trim();
@@ -314,7 +302,10 @@ function buildLodgifyEditableBookingFromSheetRow_(sheetName, rowNo, row, headerM
     const paymentUpdateCompleted = String(getRowValueByHeaders_(row, headerMap, ["ZahlungsUpdateDurchgefuehrt"], "") || "").trim();
     const isExternal = toBoolean(getRowValueByHeaders_(row, headerMap, ["IsExternal", "Extern", "ExternBuchung", "NichtLodgify"], false));
     const bookingType = String(getRowValueByHeaders_(row, headerMap, ["BookingType"], isExternal ? "lodgify_external" : "lodgify") || (isExternal ? "lodgify_external" : "lodgify")).trim();
-    const netAmount = netAmountRaw === undefined ? Number((grossAmount - feesTotal).toFixed(2)) : toNumberOrZero_(netAmountRaw);
+    const computedNetAmount = grossAmount >= 0 && feesTotal > grossAmount
+        ? 0
+        : Number((grossAmount - feesTotal).toFixed(2));
+    const netAmount = netAmountRaw === undefined ? computedNetAmount : toNumberOrZero_(netAmountRaw);
     const payoutAmount = payoutAmountRaw === undefined ? netAmount : toNumberOrZero_(payoutAmountRaw);
 
     return {
@@ -391,7 +382,7 @@ function mergeLodgifyEditableBooking_(currentBooking, booking) {
     const paymentRequestActive = getBookingFieldOverride_(booking, ["payment_request_active", "paymentRequestActive", "zahlungsaufforderung_aktiv"], ["payment_request_active", "paymentRequestActive", "zahlungsaufforderung_aktiv"]);
     const isExternalOverride = getBookingFieldOverride_(booking, ["is_external", "isExternal", "external"], ["is_external", "isExternal", "external"]);
     const bookingTypeOverride = getBookingFieldOverride_(booking, ["booking_type", "bookingType"], ["booking_type", "bookingType"]);
-    const lodgifyBookingId = getBookingFieldOverride_(booking, ["lodgify_booking_id", "lodgifyBookingId", "booking_id", "bookingId"], ["lodgify_booking_id", "lodgifyBookingId", "booking_id", "bookingId"]);
+    const lodgifyBookingId = getBookingFieldOverride_(booking, ["lodgify_booking_id", "lodgifyBookingId", "lodgify_buchungs_id", "booking_id", "bookingId"], ["lodgify_booking_id", "lodgifyBookingId", "lodgify_buchungs_id", "booking_id", "bookingId"]);
 
     const merged = {
         id: current.id,
@@ -549,7 +540,7 @@ function buildLodgifyPaymentPatchPathCandidates_(bookingId) {
 function triggerLodgifyPaymentUpdate_(booking) {
     const bookingId = String(booking.lodgify_booking_id || booking.id || "").trim();
     if (!bookingId) {
-        throw new Error("LodgifyBookingId fehlt fuer das optionale Payment-Triggering.");
+        throw new Error("LodgifyBookingId fehlt fuer das angeforderte Payment-Triggering.");
     }
 
     const pathCandidates = buildLodgifyPaymentPatchPathCandidates_(bookingId);
@@ -577,9 +568,7 @@ function triggerLodgifyPaymentUpdate_(booking) {
                 const msg = String(err && err.message ? err.message : err);
                 attempts.push(`PATCH ${path}: ${msg}`);
                 lastError = msg;
-                const status = typeof extractHttpStatusFromError_ === "function"
-                    ? extractHttpStatusFromError_(msg)
-                    : null;
+                const status = extractHttpStatusFromError_(msg);
                 if (status === 404 || status === 405) {
                     continue;
                 }
@@ -587,7 +576,8 @@ function triggerLodgifyPaymentUpdate_(booking) {
         }
     }
 
-    throw new Error(`Lodgify Payment-Update fehlgeschlagen (${bookingId}): ${attempts.join(" | ") || lastError || "unknown error"}`);
+    const attemptPreview = attempts.slice(-4).join(" | ");
+    throw new Error(`Lodgify Payment-Update fehlgeschlagen (${bookingId}, Versuche=${attempts.length}): ${attemptPreview || lastError || "unknown error"}`);
 }
 
 function updateLodgifyEditableBookingRow_(sheetName, rowNo, booking) {
@@ -606,7 +596,7 @@ function updateLodgifyEditableBookingRow_(sheetName, rowNo, booking) {
 
     const merged = mergeLodgifyEditableBooking_(currentBooking, booking || {});
     const updates = [
-        { headers: ["LodgifyBookingId", "BookingId", "BuchungsID"], value: String(merged.lodgify_booking_id || "") },
+        { headers: ["LodgifyBookingId", "LodgifyBuchungsID", "BookingId", "BuchungsID"], value: String(merged.lodgify_booking_id || "") },
         { headers: ["GastName", "GuestName"], value: String(merged.guest_name || "") },
         { headers: ["CheckIn", "Anreise"], value: parseDateOrBlank_(merged.checkin) },
         { headers: ["CheckOut", "Abreise"], value: parseDateOrBlank_(merged.checkout) },
@@ -695,9 +685,27 @@ function mapLodgifyItemToAlleBuchungenRow_(item) {
         "charges.total", "invoice.total"
     ]);
     const feesTotal = extractLodgifyFeesTotal_(item);
-    const payoutAmountRaw = extractLodgifyPayoutAmount_(item);
-    const netAmount = payoutAmountRaw !== 0 ? payoutAmountRaw : Number((amount - feesTotal).toFixed(2));
-    const payoutAmount = payoutAmountRaw !== 0 ? payoutAmountRaw : netAmount;
+    const payoutAmountDirect = firstDefined(item, [
+        "payout", "payoutAmount", "ownerPayout", "hostPayout", "netAmount", "net"
+    ]);
+    const payoutAmountNested = firstDefinedDeep(item, [
+        "quote.payout", "quote.net", "quote.netAmount",
+        "reservation.payout", "reservation.net", "reservation.netAmount",
+        "financials.payout", "financials.net", "financials.netAmount",
+        "charges.payout", "invoice.net"
+    ]);
+    const hasPayoutAmount = (payoutAmountDirect !== null && payoutAmountDirect !== undefined && payoutAmountDirect !== "") ||
+        (payoutAmountNested !== null && payoutAmountNested !== undefined && payoutAmountNested !== "");
+    const payoutAmountRaw = hasPayoutAmount
+        ? resolveAmountObject_(payoutAmountDirect !== null && payoutAmountDirect !== undefined && payoutAmountDirect !== ""
+            ? payoutAmountDirect
+            : payoutAmountNested)
+        : 0;
+    const computedNetAmount = amount >= 0 && feesTotal > amount
+        ? 0
+        : Number((amount - feesTotal).toFixed(2));
+    const netAmount = hasPayoutAmount ? payoutAmountRaw : computedNetAmount;
+    const payoutAmount = hasPayoutAmount ? payoutAmountRaw : netAmount;
 
     const status = String(
         firstDefined(item, [
