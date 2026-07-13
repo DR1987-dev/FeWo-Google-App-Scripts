@@ -458,7 +458,8 @@ function getEditableBookings_() {
     rows = rows
         .concat(readFixkostenEditable_(ss))
         .concat(readManualEditable_(ss))
-        .concat(readUmbuchungenEditable_(ss));
+        .concat(readUmbuchungenEditable_(ss))
+        .concat(readLodgifyEditable_(ss));
 
     rows.sort(function (a, b) {
         return String(b.date || "").localeCompare(String(a.date || ""));
@@ -591,6 +592,36 @@ function readUmbuchungenEditable_(ss) {
     return out;
 }
 
+function readLodgifyEditable_(ss) {
+    if (!ss || typeof getPaymentRequestConfig_ !== "function") return [];
+
+    var config = getPaymentRequestConfig_();
+    var sheetName = String(config && config.sheetName ? config.sheetName : "AlleBuchungen").trim() || "AlleBuchungen";
+    var sheet = ss.getSheetByName(sheetName);
+    if (!sheet) return [];
+
+    var values = sheet.getDataRange().getValues();
+    if (!values || values.length < 2) return [];
+
+    var headerMap = typeof getSheetHeaderMap_ === "function"
+        ? getSheetHeaderMap_(sheet)
+        : {};
+    var out = [];
+
+    for (var i = 1; i < values.length; i++) {
+        var row = values[i];
+        var rowNo = i + 1;
+        var booking = typeof buildLodgifyEditableBookingFromSheetRow_ === "function"
+            ? buildLodgifyEditableBookingFromSheetRow_(sheetName, rowNo, row, headerMap)
+            : null;
+        if (booking) {
+            out.push(booking);
+        }
+    }
+
+    return out;
+}
+
 function updateEditableBooking_(booking) {
     var id = String(booking.id || "").trim();
     if (!id || id.indexOf(":") < 0) {
@@ -599,7 +630,19 @@ function updateEditableBooking_(booking) {
 
     var parts = id.split(":");
     var kind = parts[0];
-    var rowNo = Number(parts[1]);
+    var rowNo = 0;
+    var encodedSheetName = "";
+
+    if (kind === "lodgify" || kind === "lodgify_external") {
+        if (parts.length < 3) {
+            throw new Error("Lodgify booking.id ist ungueltig");
+        }
+        rowNo = Number(parts[parts.length - 1]);
+        encodedSheetName = parts.slice(1, parts.length - 1).join(":");
+    } else {
+        rowNo = Number(parts[1]);
+    }
+
     if (!rowNo || isNaN(rowNo) || rowNo < 2) {
         throw new Error("Zeilennummer ungueltig");
     }
@@ -656,6 +699,18 @@ function updateEditableBooking_(booking) {
 
         regenerateDerivedSheets_();
         return { ok: true, id: id, kind: kind };
+    }
+
+    if (kind === "lodgify" || kind === "lodgify_external") {
+        if (typeof updateLodgifyEditableBookingRow_ !== "function") {
+            throw new Error("Lodgify-Buchungen koennen in diesem Deployment nicht bearbeitet werden.");
+        }
+
+        var sheetName = encodedSheetName
+            ? decodeURIComponent(encodedSheetName)
+            : String((getPaymentRequestConfig_() || {}).sheetName || "AlleBuchungen");
+
+        return updateLodgifyEditableBookingRow_(sheetName, rowNo, booking || {});
     }
 
     throw new Error("Nicht unterstuetzte Buchungsart: " + kind);
