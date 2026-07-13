@@ -268,12 +268,20 @@ function computeLodgifyNetAmount_(grossAmount, feesTotal) {
     const gross = toNumberOrZero_(grossAmount);
     const fees = toNumberOrZero_(feesTotal);
     if (gross < 0) {
-        return Number((gross - fees).toFixed(2));
+        return Number((gross + fees).toFixed(2));
     }
     if (fees > gross) {
         return 0;
     }
     return Number((gross - fees).toFixed(2));
+}
+
+function extractHttpStatusFromErrorSafe_(msg) {
+    if (typeof extractHttpStatusFromError_ === "function") {
+        return extractHttpStatusFromError_(msg);
+    }
+    const match = String(msg || "").match(/\((\d{3})\)/);
+    return match ? Number(match[1]) : null;
 }
 
 function extractAmountFromPaths_(item, directKeys, deepPaths) {
@@ -587,7 +595,7 @@ function triggerLodgifyPaymentUpdate_(booking) {
                 const msg = String(err && err.message ? err.message : err);
                 attempts.push(`PATCH ${path}: ${msg}`);
                 lastError = msg;
-                const status = extractHttpStatusFromError_(msg);
+                const status = extractHttpStatusFromErrorSafe_(msg);
                 if (status === 404 || status === 405) {
                     continue;
                 }
@@ -597,6 +605,7 @@ function triggerLodgifyPaymentUpdate_(booking) {
 
     const attemptPreview = attempts.slice(-4).join(" | ");
     const attemptedPaths = pathCandidates.join(", ");
+    Logger.log(`Lodgify payment patch paths tried (${bookingId}): ${attemptedPaths}`);
     const attemptedPathsPreview = attemptedPaths.length > 200 ? attemptedPaths.slice(0, 200) + "..." : attemptedPaths;
     throw new Error(`Lodgify Payment-Update fehlgeschlagen (${bookingId}, Versuche=${attempts.length}, Pfade=${attemptedPathsPreview}): ${attemptPreview || lastError || "unknown error"}`);
 }
