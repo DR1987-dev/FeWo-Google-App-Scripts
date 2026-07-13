@@ -625,7 +625,7 @@ function readLodgifyEditable_(ss) {
 function updateEditableBooking_(booking) {
     var id = String(booking.id || "").trim();
     if (!id || id.indexOf(":") < 0) {
-        throw new Error("booking.id fehlt oder ist ungueltig");
+        throw new Error("booking.id fehlt oder ist ungültig");
     }
 
     var parts = id.split(":");
@@ -635,7 +635,7 @@ function updateEditableBooking_(booking) {
 
     if (kind === "lodgify" || kind === "lodgify_external") {
         if (parts.length < 3) {
-            throw new Error("Lodgify booking.id ist ungueltig. Erwartetes Format: lodgify:<ENCODED_SHEET_NAME>:<ROW_NUMBER>");
+            throw new Error("Lodgify booking.id ist ungültig. Erwartetes Format: lodgify:<ENCODED_SHEET_NAME>:<ROW_NUMBER>");
         }
         rowNo = Number(parts[parts.length - 1]);
         encodedSheetName = parts.slice(1, parts.length - 1).join(":");
@@ -644,7 +644,7 @@ function updateEditableBooking_(booking) {
     }
 
     if (!rowNo || isNaN(rowNo) || rowNo < 2) {
-        throw new Error("Zeilennummer ungueltig");
+        throw new Error("Zeilennummer ungültig");
     }
 
     var ss = SpreadsheetApp.getActive();
@@ -703,7 +703,7 @@ function updateEditableBooking_(booking) {
 
     if (kind === "lodgify" || kind === "lodgify_external") {
         if (typeof updateLodgifyEditableBookingRow_ !== "function") {
-            throw new Error("Lodgify-Buchungen koennen in diesem Deployment nicht bearbeitet werden.");
+            throw new Error("Lodgify-Buchungen können in diesem Deployment nicht bearbeitet werden.");
         }
 
         var sheetName = encodedSheetName

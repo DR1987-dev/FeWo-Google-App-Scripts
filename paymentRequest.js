@@ -559,7 +559,7 @@ function buildLodgifyPaymentPatchPathCandidates_(bookingId) {
 function triggerLodgifyPaymentUpdate_(booking) {
     const bookingId = String(booking.lodgify_booking_id || booking.id || "").trim();
     if (!bookingId) {
-        throw new Error("LodgifyBookingId fehlt fuer das angeforderte Payment-Triggering.");
+        throw new Error("LodgifyBookingId fehlt für das angeforderte Payment-Triggering.");
     }
 
     const pathCandidates = buildLodgifyPaymentPatchPathCandidates_(bookingId);
@@ -597,7 +597,8 @@ function triggerLodgifyPaymentUpdate_(booking) {
 
     const attemptPreview = attempts.slice(-4).join(" | ");
     const attemptedPaths = pathCandidates.join(", ");
-    throw new Error(`Lodgify Payment-Update fehlgeschlagen (${bookingId}, Versuche=${attempts.length}, Pfade=${attemptedPaths}): ${attemptPreview || lastError || "unknown error"}`);
+    const attemptedPathsPreview = attemptedPaths.length > 200 ? attemptedPaths.slice(0, 200) + "..." : attemptedPaths;
+    throw new Error(`Lodgify Payment-Update fehlgeschlagen (${bookingId}, Versuche=${attempts.length}, Pfade=${attemptedPathsPreview}): ${attemptPreview || lastError || "unknown error"}`);
 }
 
 function updateLodgifyEditableBookingRow_(sheetName, rowNo, booking) {
@@ -611,7 +612,7 @@ function updateLodgifyEditableBookingRow_(sheetName, rowNo, booking) {
     const currentRow = sheet.getRange(rowNo, 1, 1, sheet.getLastColumn()).getValues()[0];
     const currentBooking = buildLodgifyEditableBookingFromSheetRow_(sheetName, rowNo, currentRow, headerMap);
     if (!currentBooking) {
-        throw new Error("Lodgify-Buchung in Zeile " + rowNo + " nicht gefunden.");
+        throw new Error("Lodgify-Buchung in Sheet " + sheetName + " in Zeile " + rowNo + " nicht gefunden.");
     }
 
     const merged = mergeLodgifyEditableBooking_(currentBooking, booking || {});
