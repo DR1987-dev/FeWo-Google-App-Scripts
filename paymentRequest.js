@@ -48,6 +48,7 @@ var ALLE_BUCHUNGEN_TIMESTAMP_COL_IDX_ = 13;
 var ALLE_BUCHUNGEN_GUEST_NAME_COL_IDX_ = 1;
 var ALLE_BUCHUNGEN_CHECKIN_COL_IDX_ = 2;
 var ALLE_BUCHUNGEN_CHECKOUT_COL_IDX_ = 3;
+var ALLE_BUCHUNGEN_STATUS_COL_IDX_ = 5;
 
 /**
  * Wandelt einen Wert in einen Boolean um.
@@ -316,6 +317,47 @@ function preserveExistingAlleBuchungenCellValue_(targetRow, existingRow, columnI
     if (!targetRow[columnIndex] && existingRow[columnIndex]) {
         targetRow[columnIndex] = existingRow[columnIndex];
     }
+}
+
+function isDeclinedOrCancelledStatusText_(status) {
+    const normalized = String(status || "").trim().toLowerCase();
+    if (!normalized) return false;
+
+    const blockedTokens = ["cancel", "canceled", "cancelled", "declin", "reject", "denied"];
+    for (let i = 0; i < blockedTokens.length; i++) {
+        if (normalized.indexOf(blockedTokens[i]) !== -1) return true;
+    }
+
+    return false;
+}
+
+function shouldIncludeLodgifyItemInAlleBuchungen_(item) {
+    if (!item || typeof item !== "object") return false;
+    if (typeof isConfirmedBooking_ === "function") {
+        return isConfirmedBooking_(item, true);
+    }
+
+    return !isDeclinedOrCancelledStatusText_(firstDefined(item, [
+        "status", "bookingStatus", "booking_status",
+        "reservationStatus", "reservation_status", "state"
+    ]));
+}
+
+function deleteSheetRowsDescending_(sheet, rowNumbers) {
+    const uniqueRows = {};
+    (rowNumbers || []).forEach(function (rowNumber) {
+        const numericRow = Number(rowNumber);
+        if (numericRow >= 2) uniqueRows[numericRow] = true;
+    });
+
+    Object.keys(uniqueRows)
+        .map(function (rowNumber) { return Number(rowNumber); })
+        .sort(function (a, b) { return b - a; })
+        .forEach(function (rowNumber) {
+            sheet.deleteRow(rowNumber);
+        });
+
+    return Object.keys(uniqueRows).length;
 }
 
 function extractLodgifyBookingId_(item) {
@@ -889,11 +931,10 @@ function mapLodgifyItemToAlleBuchungenRow_(item) {
  *
  * @param {string} sheetName  Name des Ziel-Sheets
  * @param {Array}  items      Lodgify-Buchungsobjekte
- * @returns {{ inserted: number, updated: number }}
+ * @returns {{ inserted: number, updated: number, removed: number }}
  */
 function upsertAlleBuchungenFromItems_(sheetName, items) {
-    if (!items || items.length === 0) return { inserted: 0, updated: 0 };
-
+    const sourceItems = Array.isArray(items) ? items : [];
     const sheet = ensureAlleBuchungenSheet_(sheetName);
     const lastRow = sheet.getLastRow();
     const numCols = ALLE_BUCHUNGEN_HEADERS_.length;
@@ -903,19 +944,50 @@ function upsertAlleBuchungenFromItems_(sheetName, items) {
         ? sheet.getRange(2, 1, lastRow - 1, numCols).getValues()
         : [];
 
+    let inserted = 0;
+    let updated = 0;
+    const includedItems = [];
+    const includedBookingIds = {};
+    const excludedBookingIds = {};
+    const newRows = [];
+    const rowUpdates = []; // { dataIdx, values }
+
+    sourceItems.forEach(function (item) {
+        const bookingId = extractLodgifyBookingId_(item);
+        if (!shouldIncludeLodgifyItemInAlleBuchungen_(item)) {
+            if (bookingId) excludedBookingIds[bookingId] = true;
+            return;
+        }
+
+        includedItems.push(item);
+        if (bookingId) includedBookingIds[bookingId] = true;
+    });
+
+    const rowsToDelete = [];
+    existingData.forEach(function (row, idx) {
+        const id = String(row[0] || "").trim();
+        const status = row[ALLE_BUCHUNGEN_STATUS_COL_IDX_];
+        if (!id) return;
+
+        if (excludedBookingIds[id] || (isDeclinedOrCancelledStatusText_(status) && !includedBookingIds[id])) {
+            rowsToDelete.push(idx + 2);
+        }
+    });
+
     // Index aufbauen: bookingId -> 0-basierter Datenzeilen-Index
+    const rowsMarkedForDeletion = {};
+    rowsToDelete.forEach(function (rowNumber) {
+        rowsMarkedForDeletion[rowNumber - 2] = true;
+    });
+
     const existingById = {};
     existingData.forEach(function (row, idx) {
+        if (rowsMarkedForDeletion[idx]) return;
         const id = String(row[0] || "").trim();
         if (id) existingById[id] = idx;
     });
 
-    let inserted = 0;
-    let updated = 0;
-    const newRows = [];
-    const rowUpdates = []; // { dataIdx, values }
-
-    items.forEach(function (item) {
+    includedItems.forEach(function (item) {
         const mapped = mapLodgifyItemToAlleBuchungenRow_(item);
         if (!mapped) return;
 
@@ -955,10 +1027,12 @@ function upsertAlleBuchungenFromItems_(sheetName, items) {
         sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, numCols).setValues(newRows);
     }
 
+    const removed = deleteSheetRowsDescending_(sheet, rowsToDelete);
+
     Logger.log(
-        `AlleBuchungen upsert (${sheetName}): inserted=${inserted}, updated=${updated}`
+        `AlleBuchungen upsert (${sheetName}): inserted=${inserted}, updated=${updated}, removed=${removed}`
     );
-    return { inserted, updated };
+    return { inserted, updated, removed };
 }
 
 /**
@@ -1069,7 +1143,10 @@ function processLodgifyPaymentRequestUpdates(params) {
     const reservationsResult = fetchReservationsWithFallback_(queryParams);
 
     const combinedItems = bookingsResult.items.concat(reservationsResult.items);
-    const deduped = dedupeBookingsById_(combinedItems);
+    const filteredItems = combinedItems.filter(function (item) {
+        return shouldIncludeLodgifyItemInAlleBuchungen_(item);
+    });
+    const deduped = dedupeBookingsById_(filteredItems);
     const allItems = deduped.items;
 
     if (allItems.length === 0 && (bookingsResult.error || reservationsResult.error)) {
