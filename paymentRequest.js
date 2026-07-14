@@ -327,7 +327,10 @@ function isDeclinedOrCancelledStatusText_(status) {
         /\bcancel(?:ed|led)?\b/,
         /\bdeclin(?:e|ed)?\b/,
         /\breject(?:ed|ion)?\b/,
-        /\bdenied\b/
+        /\bdenied\b/,
+        /\bstorniert\b/,
+        /\babgelehnt\b/,
+        /\babgesagt\b/
     ];
     for (let i = 0; i < blockedPatterns.length; i++) {
         if (blockedPatterns[i].test(normalized)) return true;
@@ -338,6 +341,8 @@ function isDeclinedOrCancelledStatusText_(status) {
 
 function shouldIncludeLodgifyItemInAlleBuchungen_(item) {
     if (!item || typeof item !== "object") return false;
+    // In der normalen Apps-Script-Bereitstellung kommt die zentrale Filterlogik
+    // aus lodgifyService.js; der Fallback hier greift nur, falls sie nicht geladen ist.
     if (typeof isConfirmedBooking_ === "function") {
         return isConfirmedBooking_(item, true);
     }
