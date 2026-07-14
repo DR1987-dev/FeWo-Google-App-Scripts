@@ -1273,9 +1273,9 @@ function extractLodgifyGuestName_(item) {
     const normalizedDirectName = normalizeGuestNameValue_(directName);
     if (normalizedDirectName) return normalizedDirectName;
 
-    const directGuestObject = firstDefined(item, ["guest", "customer", "tenant", "contact", "leadGuest", "booker"]);
-    const normalizedDirectGuestObjectName = normalizeGuestNameValue_(directGuestObject);
-    if (normalizedDirectGuestObjectName) return normalizedDirectGuestObjectName;
+    const directGuestValue = firstDefined(item, ["guest", "customer", "tenant", "contact", "leadGuest", "booker"]);
+    const normalizedGuestValue = normalizeGuestNameValue_(directGuestValue);
+    if (normalizedGuestValue) return normalizedGuestValue;
 
     const nestedName = firstDefinedDeep(item, [
         "guest.guest_name.full_name", "guest.guest_name.fullName", "guest.guest_name.name",
