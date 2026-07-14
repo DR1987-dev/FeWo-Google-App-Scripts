@@ -324,7 +324,7 @@ function isDeclinedOrCancelledStatusText_(status) {
     if (!normalized) return false;
 
     const blockedPatterns = [
-        /\bcancel(?:ed|led)?\b/,
+        /\bcancel(?:l?ed)\b/,
         /\bdeclin(?:e|ed)?\b/,
         /\breject(?:ed|ion)?\b/,
         /\bdenied\b/,
