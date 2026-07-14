@@ -4,10 +4,11 @@
 //
 // 1. Alle Lodgify-Buchungen werden in das Sheet "AlleBuchungen" (konfigurierbar)
 //    eingepflegt/aktualisiert.
-// 2. Die Spalte "ZahlungsAufforderungAktiv" kann manuell auf TRUE gesetzt werden.
-// 3. Beim nächsten Lodgify-Import: Wenn das Kennzeichen gesetzt ist UND wir uns im
-//    konfigurierten Zeitfenster vor CheckIn befinden, werden die Zahlungsfelder
-//    (PaymentOption, RequestFullPayment, …) aus den Lodgify-Daten übernommen.
+// 2. Beim nächsten Lodgify-Import werden für externe Buchungen mit
+//    "RequestFullPayment" automatische Zahlungsanforderungen in Lodgify ausgelöst,
+//    sobald das konfigurierte Zeitfenster vor CheckIn erreicht ist.
+// 3. Bereits ausgelöste Anforderungen werden über "ZahlungsUpdateDurchgefuehrt"
+//    erkannt und nicht erneut angefordert.
 //
 // Script Properties (konfigurierbar):
 //   PAYMENT_REQUEST_SHEET_NAME          – Sheet-Name (Standard: "AlleBuchungen")
@@ -88,10 +89,83 @@ function isWithinPaymentRequestWindow_(checkinDate, daysBeforeCheckin) {
     if (isNaN(checkin.getTime())) return false;
 
     const now = new Date();
+    if (checkin <= now) return false;
     const windowStart = new Date(checkin.getTime() - daysBeforeCheckin * 24 * 60 * 60 * 1000);
 
     // Auslösen wenn: jetzt >= Fensteranfang (d.h. wir sind im Fenster oder danach)
     return now >= windowStart;
+}
+
+function parsePositiveNumber_(value) {
+    if (value === null || value === undefined || value === "") return null;
+    const normalized = Number(value);
+    if (isNaN(normalized) || normalized <= 0) return null;
+    return normalized;
+}
+
+function hasPaymentRequestBeenCompleted_(value) {
+    return String(value === null || value === undefined ? "" : value).trim() !== "";
+}
+
+function buildPaymentRequestTimestamp_() {
+    return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss");
+}
+
+function getBookingPaymentRequestLeadDays_(booking, config) {
+    const bookingDays = parsePositiveNumber_(firstDefined(booking || {}, [
+        "full_payment_days_before_checkin",
+        "fullPaymentDaysBeforeCheckin"
+    ]));
+    if (bookingDays !== null) return bookingDays;
+
+    const bookingWeeks = parsePositiveNumber_(firstDefined(booking || {}, [
+        "full_payment_weeks_before_checkin",
+        "fullPaymentWeeksBeforeCheckin"
+    ]));
+    if (bookingWeeks !== null) return bookingWeeks * 7;
+
+    const fallbackDays = parsePositiveNumber_(config && config.daysBeforeCheckin);
+    return fallbackDays !== null ? fallbackDays : null;
+}
+
+function evaluateAutomaticPaymentRequest_(booking, paymentUpdateCompleted, config) {
+    if (!booking || typeof booking !== "object") {
+        return { shouldRequest: false, reason: "missingBooking" };
+    }
+
+    if (hasPaymentRequestBeenCompleted_(paymentUpdateCompleted)) {
+        return { shouldRequest: false, reason: "alreadyRequested" };
+    }
+
+    const isExternal = toBoolean(firstDefined(booking, ["is_external", "isExternal", "external"]));
+    if (!isExternal) {
+        return { shouldRequest: false, reason: "notExternal" };
+    }
+
+    const requestFullPayment = toBoolean(firstDefined(booking, ["request_full_payment", "requestFullPayment"]));
+    if (!requestFullPayment) {
+        return { shouldRequest: false, reason: "fullPaymentDisabled" };
+    }
+
+    const checkinDate = extractLodgifyCheckinDate_(booking);
+    if (!checkinDate) {
+        return { shouldRequest: false, reason: "missingCheckin" };
+    }
+
+    const daysBeforeCheckin = getBookingPaymentRequestLeadDays_(booking, config);
+    if (daysBeforeCheckin === null) {
+        return { shouldRequest: false, reason: "missingLeadTime" };
+    }
+
+    if (!isWithinPaymentRequestWindow_(checkinDate, daysBeforeCheckin)) {
+        return { shouldRequest: false, reason: "outsideWindow", daysBeforeCheckin: daysBeforeCheckin };
+    }
+
+    return {
+        shouldRequest: true,
+        reason: "eligible",
+        daysBeforeCheckin: daysBeforeCheckin
+    };
 }
 
 /**
@@ -658,11 +732,20 @@ function updateLodgifyEditableBookingRow_(sheetName, rowNo, booking) {
     let paymentTriggerResult = null;
 
     if (shouldTriggerLodgifyPaymentUpdate_(booking || {})) {
-        paymentTriggerResult = triggerLodgifyPaymentUpdate_(merged);
-        updateSheetRowByHeaders(sheetName, rowNo, [{
-            headers: ["ZahlungsUpdateDurchgefuehrt"],
-            value: Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss")
-        }]);
+        if (hasPaymentRequestBeenCompleted_(merged.payment_update_completed)) {
+            paymentTriggerResult = {
+                ok: true,
+                skipped: true,
+                reason: "alreadyRequested",
+                requestedAt: merged.payment_update_completed
+            };
+        } else {
+            paymentTriggerResult = triggerLodgifyPaymentUpdate_(merged);
+            updateSheetRowByHeaders(sheetName, rowNo, [{
+                headers: ["ZahlungsUpdateDurchgefuehrt"],
+                value: buildPaymentRequestTimestamp_()
+            }]);
+        }
     }
 
     return {
@@ -864,55 +947,46 @@ function upsertAlleBuchungenFromItems_(sheetName, items) {
 }
 
 /**
- * Scannt das AlleBuchungen-Sheet nach Zeilen mit gesetztem "ZahlungsAufforderungAktiv"-Kenner
- * und schreibt bei passendem Zeitfenster die Zahlungsfelder aus den Lodgify-Daten.
+ * Scannt das AlleBuchungen-Sheet nach externen Lodgify-Buchungen mit aktivem
+ * "RequestFullPayment" und löst die Zahlungsanforderung im passenden Zeitfenster aus.
  *
  * @param {string} sheetName   Name des Sheets
  * @param {Object} itemsById   Map: bookingId -> Lodgify-Buchungsobjekt
  * @param {Object} config      { daysBeforeCheckin: number }
- * @returns {{ applied: number, skippedNoData: number, skippedWindow: number }}
+ * @returns {{ applied: number, skippedNoData: number, skippedWindow: number, skippedAlreadyRequested: number, skippedIneligible: number }}
  */
 function applyPaymentRequestUpdates_(sheetName, itemsById, config) {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    if (!ss) return { applied: 0, skippedNoData: 0, skippedWindow: 0 };
+    if (!ss) return { applied: 0, skippedNoData: 0, skippedWindow: 0, skippedAlreadyRequested: 0, skippedIneligible: 0 };
 
     const sheet = ss.getSheetByName(sheetName);
-    if (!sheet) return { applied: 0, skippedNoData: 0, skippedWindow: 0 };
+    if (!sheet) return { applied: 0, skippedNoData: 0, skippedWindow: 0, skippedAlreadyRequested: 0, skippedIneligible: 0 };
 
     const lastRow = sheet.getLastRow();
-    if (lastRow < 2) return { applied: 0, skippedNoData: 0, skippedWindow: 0 };
+    if (lastRow < 2) return { applied: 0, skippedNoData: 0, skippedWindow: 0, skippedAlreadyRequested: 0, skippedIneligible: 0 };
 
     const numCols = sheet.getLastColumn();
     const allData = sheet.getRange(1, 1, lastRow, numCols).getValues();
     const headers = allData[0].map(function (h) { return String(h || "").trim(); });
 
-    const markerColIdx = headers.indexOf("ZahlungsAufforderungAktiv");
-    const checkinColIdx = headers.indexOf("CheckIn");
     const bookingIdColIdx = headers.indexOf("LodgifyBookingId");
     const timestampColIdx = headers.indexOf("ZahlungsUpdateDurchgefuehrt");
 
-    if (markerColIdx === -1 || checkinColIdx === -1 || bookingIdColIdx === -1) {
+    if (bookingIdColIdx === -1) {
         Logger.log(
-            "⚠️ AlleBuchungen: Benötigte Spalten (ZahlungsAufforderungAktiv, CheckIn, LodgifyBookingId) nicht gefunden."
+            "⚠️ AlleBuchungen: Benötigte Spalte LodgifyBookingId nicht gefunden."
         );
-        return { applied: 0, skippedNoData: 0, skippedWindow: 0 };
+        return { applied: 0, skippedNoData: 0, skippedWindow: 0, skippedAlreadyRequested: 0, skippedIneligible: 0 };
     }
 
     let applied = 0;
     let skippedNoData = 0;
     let skippedWindow = 0;
+    let skippedAlreadyRequested = 0;
+    let skippedIneligible = 0;
 
     for (let i = 1; i < allData.length; i++) {
         const row = allData[i];
-
-        if (!toBoolean(row[markerColIdx])) continue;
-
-        const checkinValue = row[checkinColIdx];
-        if (!isWithinPaymentRequestWindow_(checkinValue, config.daysBeforeCheckin)) {
-            skippedWindow++;
-            continue;
-        }
-
         const bookingId = String(row[bookingIdColIdx] || "").trim();
         if (!bookingId) continue;
 
@@ -925,26 +999,38 @@ function applyPaymentRequestUpdates_(sheetName, itemsById, config) {
             continue;
         }
 
-        const sheetRow = i + 1; // 1-basiert
-        updateLodgifyBookingInSheet(sheetName, sheetRow, booking);
+        const paymentUpdateCompleted = timestampColIdx === -1 ? "" : row[timestampColIdx];
+        const evaluation = evaluateAutomaticPaymentRequest_(booking, paymentUpdateCompleted, config);
+        if (!evaluation.shouldRequest) {
+            if (evaluation.reason === "alreadyRequested") {
+                skippedAlreadyRequested++;
+            } else if (evaluation.reason === "outsideWindow") {
+                skippedWindow++;
+            } else {
+                skippedIneligible++;
+            }
+            continue;
+        }
 
-        // Zeitstempel setzen
+        const sheetRow = i + 1; // 1-basiert
+        triggerLodgifyPaymentUpdate_(booking);
+
         if (timestampColIdx !== -1) {
             sheet.getRange(sheetRow, timestampColIdx + 1).setValue(
-                Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss")
+                buildPaymentRequestTimestamp_()
             );
         }
 
         Logger.log(
-            `✅ AlleBuchungen Zahlungsupdate: Buchung ${bookingId} (Zeile ${sheetRow}) aktualisiert.`
+            `✅ AlleBuchungen Zahlungsupdate: Buchung ${bookingId} (Zeile ${sheetRow}) in Lodgify angefordert.`
         );
         applied++;
     }
 
     Logger.log(
-        `AlleBuchungen Zahlungsupdate: applied=${applied}, skippedWindow=${skippedWindow}, skippedNoData=${skippedNoData}`
+        `AlleBuchungen Zahlungsupdate: applied=${applied}, skippedWindow=${skippedWindow}, skippedNoData=${skippedNoData}, skippedAlreadyRequested=${skippedAlreadyRequested}, skippedIneligible=${skippedIneligible}`
     );
-    return { applied, skippedNoData, skippedWindow };
+    return { applied, skippedNoData, skippedWindow, skippedAlreadyRequested, skippedIneligible };
 }
 
 /**
