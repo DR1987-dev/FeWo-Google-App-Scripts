@@ -4,10 +4,11 @@
 //
 // 1. Alle Lodgify-Buchungen werden in das Sheet "AlleBuchungen" (konfigurierbar)
 //    eingepflegt/aktualisiert.
-// 2. Die Spalte "ZahlungsAufforderungAktiv" kann manuell auf TRUE gesetzt werden.
-// 3. Beim nächsten Lodgify-Import: Wenn das Kennzeichen gesetzt ist UND wir uns im
-//    konfigurierten Zeitfenster vor CheckIn befinden, werden die Zahlungsfelder
-//    (PaymentOption, RequestFullPayment, …) aus den Lodgify-Daten übernommen.
+// 2. Beim nächsten Lodgify-Import werden für externe Buchungen mit
+//    "RequestFullPayment" automatische Zahlungsanforderungen in Lodgify ausgelöst,
+//    sobald das konfigurierte Zeitfenster vor CheckIn erreicht ist.
+// 3. Bereits ausgelöste Anforderungen werden über "ZahlungsUpdateDurchgefuehrt"
+//    erkannt und nicht erneut angefordert.
 //
 // Script Properties (konfigurierbar):
 //   PAYMENT_REQUEST_SHEET_NAME          – Sheet-Name (Standard: "AlleBuchungen")
@@ -47,6 +48,16 @@ var ALLE_BUCHUNGEN_TIMESTAMP_COL_IDX_ = 13;
 var ALLE_BUCHUNGEN_GUEST_NAME_COL_IDX_ = 1;
 var ALLE_BUCHUNGEN_CHECKIN_COL_IDX_ = 2;
 var ALLE_BUCHUNGEN_CHECKOUT_COL_IDX_ = 3;
+var ALLE_BUCHUNGEN_STATUS_COL_IDX_ = ALLE_BUCHUNGEN_HEADERS_.indexOf("Status");
+var DECLINED_OR_CANCELLED_STATUS_PATTERNS_ = [
+    /\bcancel(?:ed|led)\b/,
+    /\bdeclin(?:e|ed)\b/,
+    /\breject(?:ed|ion)?\b/,
+    /\bdenied\b/,
+    /\bstorniert\b/,
+    /\babgelehnt\b/,
+    /\babgesagt\b/
+];
 
 /**
  * Wandelt einen Wert in einen Boolean um.
@@ -88,10 +99,102 @@ function isWithinPaymentRequestWindow_(checkinDate, daysBeforeCheckin) {
     if (isNaN(checkin.getTime())) return false;
 
     const now = new Date();
+    // Vergangene Check-ins werden ausgeschlossen, damit für bereits begonnene oder
+    // abgeschlossene Aufenthalte keine verspätete Zahlungsanforderung mehr gesendet wird.
+    if (checkin < now) return false;
     const windowStart = new Date(checkin.getTime() - daysBeforeCheckin * 24 * 60 * 60 * 1000);
 
     // Auslösen wenn: jetzt >= Fensteranfang (d.h. wir sind im Fenster oder danach)
     return now >= windowStart;
+}
+
+function parseStrictPositiveNumber_(value) {
+    if (value === null || value === undefined || value === "") return null;
+    const normalized = Number(value);
+    if (isNaN(normalized) || normalized <= 0) return null;
+    return normalized;
+}
+
+function hasPaymentRequestTimestamp_(value) {
+    return String(value || "").trim() !== "";
+}
+
+function getPaymentRequestBlockReason_(paymentUpdateCompleted) {
+    return hasPaymentRequestTimestamp_(paymentUpdateCompleted) ? "alreadyRequested" : "";
+}
+
+function buildSkippedPaymentRequestResult_(paymentUpdateCompleted) {
+    const blockReason = getPaymentRequestBlockReason_(paymentUpdateCompleted);
+    if (!blockReason) return null;
+
+    return {
+        ok: true,
+        skipped: true,
+        reason: blockReason,
+        requestedAt: paymentUpdateCompleted
+    };
+}
+
+function buildPaymentRequestTimestamp_() {
+    return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss");
+}
+
+function getBookingPaymentRequestLeadDays_(booking, config) {
+    const bookingDays = parseStrictPositiveNumber_(firstDefined(booking || {}, [
+        "full_payment_days_before_checkin",
+        "fullPaymentDaysBeforeCheckin"
+    ]));
+    if (bookingDays !== null) return bookingDays;
+
+    const bookingWeeks = parseStrictPositiveNumber_(firstDefined(booking || {}, [
+        "full_payment_weeks_before_checkin",
+        "fullPaymentWeeksBeforeCheckin"
+    ]));
+    if (bookingWeeks !== null) return bookingWeeks * 7;
+
+    const fallbackDays = parseStrictPositiveNumber_(config && config.daysBeforeCheckin);
+    return fallbackDays !== null ? fallbackDays : null;
+}
+
+function evaluateAutomaticPaymentRequest_(booking, paymentUpdateCompleted, config) {
+    if (!booking || typeof booking !== "object") {
+        return { shouldRequest: false, reason: "missingBooking" };
+    }
+
+    const skippedRequest = buildSkippedPaymentRequestResult_(paymentUpdateCompleted);
+    if (skippedRequest) {
+        return { shouldRequest: false, reason: skippedRequest.reason };
+    }
+
+    const isExternal = toBoolean(firstDefined(booking, ["is_external", "isExternal", "external"]));
+    if (!isExternal) {
+        return { shouldRequest: false, reason: "notExternal" };
+    }
+
+    const requestFullPayment = toBoolean(firstDefined(booking, ["request_full_payment", "requestFullPayment"]));
+    if (!requestFullPayment) {
+        return { shouldRequest: false, reason: "fullPaymentDisabled" };
+    }
+
+    const checkinDate = extractLodgifyCheckinDate_(booking);
+    if (!checkinDate) {
+        return { shouldRequest: false, reason: "missingCheckin" };
+    }
+
+    const daysBeforeCheckin = getBookingPaymentRequestLeadDays_(booking, config);
+    if (daysBeforeCheckin === null) {
+        return { shouldRequest: false, reason: "missingLeadTime" };
+    }
+
+    if (!isWithinPaymentRequestWindow_(checkinDate, daysBeforeCheckin)) {
+        return { shouldRequest: false, reason: "outsideWindow", daysBeforeCheckin: daysBeforeCheckin };
+    }
+
+    return {
+        shouldRequest: true,
+        reason: "eligible",
+        daysBeforeCheckin: daysBeforeCheckin
+    };
 }
 
 /**
@@ -223,6 +326,54 @@ function preserveExistingAlleBuchungenCellValue_(targetRow, existingRow, columnI
     if (!targetRow[columnIndex] && existingRow[columnIndex]) {
         targetRow[columnIndex] = existingRow[columnIndex];
     }
+}
+
+function isDeclinedOrCancelledStatusText_(status) {
+    const normalized = String(status || "").trim().toLowerCase();
+    if (!normalized) return false;
+
+    for (let i = 0; i < DECLINED_OR_CANCELLED_STATUS_PATTERNS_.length; i++) {
+        if (DECLINED_OR_CANCELLED_STATUS_PATTERNS_[i].test(normalized)) return true;
+    }
+
+    return false;
+}
+
+function shouldIncludeLodgifyItemInAlleBuchungen_(item) {
+    if (!item || typeof item !== "object") return false;
+    // In der normalen Apps-Script-Bereitstellung kommt die zentrale Filterlogik
+    // aus lodgifyService.js; der Fallback hier greift nur, falls sie nicht geladen ist.
+    if (typeof isConfirmedBooking_ === "function") {
+        return isConfirmedBooking_(item, true);
+    }
+
+    return !isDeclinedOrCancelledStatusText_(firstDefined(item, [
+        "status", "bookingStatus", "booking_status",
+        "reservationStatus", "reservation_status", "state"
+    ]));
+}
+
+function deleteSheetRowsDescending_(sheet, rowNumbers) {
+    const uniqueRows = {};
+    (rowNumbers || []).forEach(function (rowNumber) {
+        const numericRow = Number(rowNumber);
+        if (numericRow >= 2) uniqueRows[numericRow] = true;
+    });
+
+    Object.keys(uniqueRows)
+        .map(function (rowNumber) { return Number(rowNumber); })
+        .sort(function (a, b) { return b - a; })
+        .forEach(function (rowNumber) {
+            sheet.deleteRow(rowNumber);
+        });
+
+    return Object.keys(uniqueRows).length;
+}
+
+function shouldDeleteExistingAlleBuchungenRow_(bookingId, status, excludedBookingIds, includedBookingIds) {
+    if (!bookingId) return false;
+    if (excludedBookingIds[bookingId]) return true;
+    return isDeclinedOrCancelledStatusText_(status) && !includedBookingIds[bookingId];
 }
 
 function extractLodgifyBookingId_(item) {
@@ -658,11 +809,16 @@ function updateLodgifyEditableBookingRow_(sheetName, rowNo, booking) {
     let paymentTriggerResult = null;
 
     if (shouldTriggerLodgifyPaymentUpdate_(booking || {})) {
-        paymentTriggerResult = triggerLodgifyPaymentUpdate_(merged);
-        updateSheetRowByHeaders(sheetName, rowNo, [{
-            headers: ["ZahlungsUpdateDurchgefuehrt"],
-            value: Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss")
-        }]);
+        const skippedRequest = buildSkippedPaymentRequestResult_(merged.payment_update_completed);
+        if (skippedRequest) {
+            paymentTriggerResult = skippedRequest;
+        } else {
+            paymentTriggerResult = triggerLodgifyPaymentUpdate_(merged);
+            updateSheetRowByHeaders(sheetName, rowNo, [{
+                headers: ["ZahlungsUpdateDurchgefuehrt"],
+                value: buildPaymentRequestTimestamp_()
+            }]);
+        }
     }
 
     return {
@@ -672,7 +828,7 @@ function updateLodgifyEditableBookingRow_(sheetName, rowNo, booking) {
         sheet: sheetName,
         row: rowNo,
         updated: updateResult,
-        paymentTriggered: !!paymentTriggerResult,
+        paymentTriggered: !!(paymentTriggerResult && !paymentTriggerResult.skipped),
         paymentTriggerResult: paymentTriggerResult
     };
 }
@@ -791,11 +947,10 @@ function mapLodgifyItemToAlleBuchungenRow_(item) {
  *
  * @param {string} sheetName  Name des Ziel-Sheets
  * @param {Array}  items      Lodgify-Buchungsobjekte
- * @returns {{ inserted: number, updated: number }}
+ * @returns {{ inserted: number, updated: number, removed: number }}
  */
 function upsertAlleBuchungenFromItems_(sheetName, items) {
-    if (!items || items.length === 0) return { inserted: 0, updated: 0 };
-
+    const sourceItems = Array.isArray(items) ? items : [];
     const sheet = ensureAlleBuchungenSheet_(sheetName);
     const lastRow = sheet.getLastRow();
     const numCols = ALLE_BUCHUNGEN_HEADERS_.length;
@@ -805,19 +960,50 @@ function upsertAlleBuchungenFromItems_(sheetName, items) {
         ? sheet.getRange(2, 1, lastRow - 1, numCols).getValues()
         : [];
 
+    let inserted = 0;
+    let updated = 0;
+    const includedItems = [];
+    const includedBookingIds = {};
+    const excludedBookingIds = {};
+    const newRows = [];
+    const rowUpdates = []; // { dataIdx, values }
+
+    sourceItems.forEach(function (item) {
+        const bookingId = extractLodgifyBookingId_(item);
+        if (!shouldIncludeLodgifyItemInAlleBuchungen_(item)) {
+            if (bookingId) excludedBookingIds[bookingId] = true;
+            return;
+        }
+
+        includedItems.push(item);
+        if (bookingId) includedBookingIds[bookingId] = true;
+    });
+
+    const rowsToDelete = [];
+    existingData.forEach(function (row, idx) {
+        const id = String(row[0] || "").trim();
+        const status = row[ALLE_BUCHUNGEN_STATUS_COL_IDX_];
+        if (!id) return;
+
+        if (shouldDeleteExistingAlleBuchungenRow_(id, status, excludedBookingIds, includedBookingIds)) {
+            rowsToDelete.push(idx + 2);
+        }
+    });
+
     // Index aufbauen: bookingId -> 0-basierter Datenzeilen-Index
+    const rowsMarkedForDeletion = {};
+    rowsToDelete.forEach(function (rowNumber) {
+        rowsMarkedForDeletion[rowNumber - 2] = true;
+    });
+
     const existingById = {};
     existingData.forEach(function (row, idx) {
+        if (rowsMarkedForDeletion[idx]) return;
         const id = String(row[0] || "").trim();
         if (id) existingById[id] = idx;
     });
 
-    let inserted = 0;
-    let updated = 0;
-    const newRows = [];
-    const rowUpdates = []; // { dataIdx, values }
-
-    items.forEach(function (item) {
+    includedItems.forEach(function (item) {
         const mapped = mapLodgifyItemToAlleBuchungenRow_(item);
         if (!mapped) return;
 
@@ -857,62 +1043,55 @@ function upsertAlleBuchungenFromItems_(sheetName, items) {
         sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, numCols).setValues(newRows);
     }
 
+    const removed = deleteSheetRowsDescending_(sheet, rowsToDelete);
+
     Logger.log(
-        `AlleBuchungen upsert (${sheetName}): inserted=${inserted}, updated=${updated}`
+        `AlleBuchungen upsert (${sheetName}): inserted=${inserted}, updated=${updated}, removed=${removed}`
     );
-    return { inserted, updated };
+    return { inserted, updated, removed };
 }
 
 /**
- * Scannt das AlleBuchungen-Sheet nach Zeilen mit gesetztem "ZahlungsAufforderungAktiv"-Kenner
- * und schreibt bei passendem Zeitfenster die Zahlungsfelder aus den Lodgify-Daten.
+ * Scannt das AlleBuchungen-Sheet nach externen Lodgify-Buchungen mit aktivem
+ * "RequestFullPayment" und löst die Zahlungsanforderung im passenden Zeitfenster aus.
  *
  * @param {string} sheetName   Name des Sheets
  * @param {Object} itemsById   Map: bookingId -> Lodgify-Buchungsobjekt
  * @param {Object} config      { daysBeforeCheckin: number }
- * @returns {{ applied: number, skippedNoData: number, skippedWindow: number }}
+ * @returns {{ applied: number, skippedNoData: number, skippedWindow: number, skippedAlreadyRequested: number, skippedIneligible: number }}
  */
 function applyPaymentRequestUpdates_(sheetName, itemsById, config) {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    if (!ss) return { applied: 0, skippedNoData: 0, skippedWindow: 0 };
+    if (!ss) return { applied: 0, skippedNoData: 0, skippedWindow: 0, skippedAlreadyRequested: 0, skippedIneligible: 0 };
 
     const sheet = ss.getSheetByName(sheetName);
-    if (!sheet) return { applied: 0, skippedNoData: 0, skippedWindow: 0 };
+    if (!sheet) return { applied: 0, skippedNoData: 0, skippedWindow: 0, skippedAlreadyRequested: 0, skippedIneligible: 0 };
 
     const lastRow = sheet.getLastRow();
-    if (lastRow < 2) return { applied: 0, skippedNoData: 0, skippedWindow: 0 };
+    if (lastRow < 2) return { applied: 0, skippedNoData: 0, skippedWindow: 0, skippedAlreadyRequested: 0, skippedIneligible: 0 };
 
     const numCols = sheet.getLastColumn();
     const allData = sheet.getRange(1, 1, lastRow, numCols).getValues();
     const headers = allData[0].map(function (h) { return String(h || "").trim(); });
 
-    const markerColIdx = headers.indexOf("ZahlungsAufforderungAktiv");
-    const checkinColIdx = headers.indexOf("CheckIn");
     const bookingIdColIdx = headers.indexOf("LodgifyBookingId");
     const timestampColIdx = headers.indexOf("ZahlungsUpdateDurchgefuehrt");
 
-    if (markerColIdx === -1 || checkinColIdx === -1 || bookingIdColIdx === -1) {
+    if (bookingIdColIdx === -1) {
         Logger.log(
-            "⚠️ AlleBuchungen: Benötigte Spalten (ZahlungsAufforderungAktiv, CheckIn, LodgifyBookingId) nicht gefunden."
+            "⚠️ AlleBuchungen: Benötigte Spalte LodgifyBookingId nicht gefunden."
         );
-        return { applied: 0, skippedNoData: 0, skippedWindow: 0 };
+        return { applied: 0, skippedNoData: 0, skippedWindow: 0, skippedAlreadyRequested: 0, skippedIneligible: 0 };
     }
 
     let applied = 0;
     let skippedNoData = 0;
     let skippedWindow = 0;
+    let skippedAlreadyRequested = 0;
+    let skippedIneligible = 0;
 
     for (let i = 1; i < allData.length; i++) {
         const row = allData[i];
-
-        if (!toBoolean(row[markerColIdx])) continue;
-
-        const checkinValue = row[checkinColIdx];
-        if (!isWithinPaymentRequestWindow_(checkinValue, config.daysBeforeCheckin)) {
-            skippedWindow++;
-            continue;
-        }
-
         const bookingId = String(row[bookingIdColIdx] || "").trim();
         if (!bookingId) continue;
 
@@ -925,26 +1104,43 @@ function applyPaymentRequestUpdates_(sheetName, itemsById, config) {
             continue;
         }
 
-        const sheetRow = i + 1; // 1-basiert
-        updateLodgifyBookingInSheet(sheetName, sheetRow, booking);
+        const paymentUpdateCompleted = timestampColIdx === -1 ? "" : row[timestampColIdx];
+        const evaluation = evaluateAutomaticPaymentRequest_(booking, paymentUpdateCompleted, config);
+        if (!evaluation.shouldRequest) {
+            if (evaluation.reason === "alreadyRequested") {
+                skippedAlreadyRequested++;
+            } else if (evaluation.reason === "outsideWindow") {
+                skippedWindow++;
+            } else {
+                skippedIneligible++;
+            }
+            continue;
+        }
 
-        // Zeitstempel setzen
+        const sheetRow = i + 1; // 1-basiert
+        const paymentTriggerResult = triggerLodgifyPaymentUpdate_(booking);
+        if (!paymentTriggerResult || paymentTriggerResult.ok !== true) {
+            const status = paymentTriggerResult && paymentTriggerResult.status ? `status=${paymentTriggerResult.status}` : "status=unbekannt";
+            const path = paymentTriggerResult && paymentTriggerResult.path ? `path=${paymentTriggerResult.path}` : "path=unbekannt";
+            throw new Error(`Lodgify Zahlungsanforderung für Buchung ${bookingId} fehlgeschlagen (${status}, ${path}).`);
+        }
+
         if (timestampColIdx !== -1) {
             sheet.getRange(sheetRow, timestampColIdx + 1).setValue(
-                Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss")
+                buildPaymentRequestTimestamp_()
             );
         }
 
         Logger.log(
-            `✅ AlleBuchungen Zahlungsupdate: Buchung ${bookingId} (Zeile ${sheetRow}) aktualisiert.`
+            `✅ AlleBuchungen Zahlungsupdate: Buchung ${bookingId} (Zeile ${sheetRow}) in Lodgify angefordert.`
         );
         applied++;
     }
 
     Logger.log(
-        `AlleBuchungen Zahlungsupdate: applied=${applied}, skippedWindow=${skippedWindow}, skippedNoData=${skippedNoData}`
+        `AlleBuchungen Zahlungsupdate: applied=${applied}, skippedWindow=${skippedWindow}, skippedNoData=${skippedNoData}, skippedAlreadyRequested=${skippedAlreadyRequested}, skippedIneligible=${skippedIneligible}`
     );
-    return { applied, skippedNoData, skippedWindow };
+    return { applied, skippedNoData, skippedWindow, skippedAlreadyRequested, skippedIneligible };
 }
 
 /**
@@ -963,7 +1159,10 @@ function processLodgifyPaymentRequestUpdates(params) {
     const reservationsResult = fetchReservationsWithFallback_(queryParams);
 
     const combinedItems = bookingsResult.items.concat(reservationsResult.items);
-    const deduped = dedupeBookingsById_(combinedItems);
+    const filteredItems = combinedItems.filter(function (item) {
+        return shouldIncludeLodgifyItemInAlleBuchungen_(item);
+    });
+    const deduped = dedupeBookingsById_(filteredItems);
     const allItems = deduped.items;
 
     if (allItems.length === 0 && (bookingsResult.error || reservationsResult.error)) {
