@@ -89,7 +89,8 @@ function isWithinPaymentRequestWindow_(checkinDate, daysBeforeCheckin) {
     if (isNaN(checkin.getTime())) return false;
 
     const now = new Date();
-    // Keine Zahlungsanforderung mehr für vergangene Check-ins auslösen.
+    // Vergangene Check-ins werden ausgeschlossen, damit für bereits begonnene oder
+    // abgeschlossene Aufenthalte keine verspätete Zahlungsanforderung mehr gesendet wird.
     if (checkin < now) return false;
     const windowStart = new Date(checkin.getTime() - daysBeforeCheckin * 24 * 60 * 60 * 1000);
 
@@ -97,7 +98,7 @@ function isWithinPaymentRequestWindow_(checkinDate, daysBeforeCheckin) {
     return now >= windowStart;
 }
 
-function parsePositiveNumber_(value) {
+function parseStrictPositiveNumber_(value) {
     if (value === null || value === undefined || value === "") return null;
     const normalized = Number(value);
     if (isNaN(normalized) || normalized <= 0) return null;
@@ -129,19 +130,19 @@ function buildPaymentRequestTimestamp_() {
 }
 
 function getBookingPaymentRequestLeadDays_(booking, config) {
-    const bookingDays = parsePositiveNumber_(firstDefined(booking || {}, [
+    const bookingDays = parseStrictPositiveNumber_(firstDefined(booking || {}, [
         "full_payment_days_before_checkin",
         "fullPaymentDaysBeforeCheckin"
     ]));
     if (bookingDays !== null) return bookingDays;
 
-    const bookingWeeks = parsePositiveNumber_(firstDefined(booking || {}, [
+    const bookingWeeks = parseStrictPositiveNumber_(firstDefined(booking || {}, [
         "full_payment_weeks_before_checkin",
         "fullPaymentWeeksBeforeCheckin"
     ]));
     if (bookingWeeks !== null) return bookingWeeks * 7;
 
-    const fallbackDays = parsePositiveNumber_(config && config.daysBeforeCheckin);
+    const fallbackDays = parseStrictPositiveNumber_(config && config.daysBeforeCheckin);
     return fallbackDays !== null ? fallbackDays : null;
 }
 
@@ -1029,7 +1030,9 @@ function applyPaymentRequestUpdates_(sheetName, itemsById, config) {
         const sheetRow = i + 1; // 1-basiert
         const paymentTriggerResult = triggerLodgifyPaymentUpdate_(booking);
         if (!paymentTriggerResult || paymentTriggerResult.ok !== true) {
-            throw new Error(`Lodgify Zahlungsanforderung für Buchung ${bookingId} fehlgeschlagen: ${JSON.stringify(paymentTriggerResult || {})}`);
+            const status = paymentTriggerResult && paymentTriggerResult.status ? `status=${paymentTriggerResult.status}` : "status=unbekannt";
+            const path = paymentTriggerResult && paymentTriggerResult.path ? `path=${paymentTriggerResult.path}` : "path=unbekannt";
+            throw new Error(`Lodgify Zahlungsanforderung für Buchung ${bookingId} fehlgeschlagen (${status}, ${path}).`);
         }
 
         if (timestampColIdx !== -1) {
