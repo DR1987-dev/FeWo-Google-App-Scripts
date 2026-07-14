@@ -1060,7 +1060,27 @@ function extractWertstellungDate_(item) {
 }
 
 function extractLodgifyCheckinDate_(item) {
-    return extractWertstellungDate_(item);
+    const directValue = firstDefined(item || {}, [
+        "checkIn", "check_in", "checkInDate", "check_in_date",
+        "arrival", "arrivalDate", "arrival_date", "dateArrival", "date_arrival",
+        "startDate", "start_date", "from", "dateFrom", "date_from"
+    ]);
+    const directDate = parseDateOrNull(directValue);
+    if (directDate) return directDate;
+
+    const nestedValue = firstDefinedDeep(item || {}, [
+        "reservation.arrival", "reservation.arrivalDate", "reservation.arrival_date",
+        "reservation.checkIn", "reservation.check_in", "reservation.startDate", "reservation.start_date",
+        "reservation.from", "reservation.dateFrom", "reservation.date_from",
+        "booking.arrival", "booking.arrivalDate", "booking.arrival_date",
+        "booking.checkIn", "booking.check_in", "booking.startDate", "booking.start_date",
+        "booking.from", "booking.dateFrom", "booking.date_from",
+        "period.from", "period.start", "stay.from", "stay.start", "dates.arrival", "dates.checkIn"
+    ]);
+    const nestedDate = parseDateOrNull(nestedValue);
+    if (nestedDate) return nestedDate;
+
+    return null;
 }
 
 function extractLodgifyCheckoutDate_(item) {
@@ -1151,8 +1171,7 @@ function extractLodgifyGuestName_(item) {
         ["first_name", "last_name"]
     ];
 
-    for (let i = 0; i < namePathPairs.length; i++) {
-        const pair = namePathPairs[i];
+    for (const pair of namePathPairs) {
         const first = String(getByPath_(item, pair[0]) || "").trim();
         const last = String(getByPath_(item, pair[1]) || "").trim();
         const combined = `${first} ${last}`.trim();
