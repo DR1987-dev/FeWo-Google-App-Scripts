@@ -1273,8 +1273,8 @@ function extractLodgifyGuestName_(item) {
     const normalizedDirectName = normalizeGuestNameValue_(directName);
     if (normalizedDirectName) return normalizedDirectName;
 
-    const directGuestValue = firstDefined(item, ["guest", "customer", "tenant", "contact", "leadGuest", "booker"]);
-    const normalizedGuestValue = normalizeGuestNameValue_(directGuestValue);
+    const guestCandidate = firstDefined(item, ["guest", "customer", "tenant", "contact", "leadGuest", "booker"]);
+    const normalizedGuestValue = normalizeGuestNameValue_(guestCandidate);
     if (normalizedGuestValue) return normalizedGuestValue;
 
     const nestedName = firstDefinedDeep(item, [
@@ -1325,7 +1325,7 @@ function extractLodgifyGuestName_(item) {
 function normalizeGuestNameValue_(value) {
     if (value === null || value === undefined || value === "") return "";
 
-    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    if (typeof value === "string") {
         return String(value).trim();
     }
 
