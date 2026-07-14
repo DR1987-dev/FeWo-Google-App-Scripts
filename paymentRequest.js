@@ -819,6 +819,15 @@ function upsertAlleBuchungenFromItems_(sheetName, items) {
             // Neue Werte übernehmen, aber ZahlungsAufforderungAktiv und
             // ZahlungsUpdateDurchgefuehrt aus dem bestehenden Eintrag beibehalten
             const newRowValues = mapped.row.slice();
+            if (!newRowValues[1] && existingRow[1]) {
+                newRowValues[1] = existingRow[1];
+            }
+            if (!newRowValues[2] && existingRow[2]) {
+                newRowValues[2] = existingRow[2];
+            }
+            if (!newRowValues[3] && existingRow[3]) {
+                newRowValues[3] = existingRow[3];
+            }
             newRowValues[ALLE_BUCHUNGEN_MARKER_COL_IDX_] = existingRow[ALLE_BUCHUNGEN_MARKER_COL_IDX_];
             if (existingRow[ALLE_BUCHUNGEN_TIMESTAMP_COL_IDX_]) {
                 newRowValues[ALLE_BUCHUNGEN_TIMESTAMP_COL_IDX_] = existingRow[ALLE_BUCHUNGEN_TIMESTAMP_COL_IDX_];

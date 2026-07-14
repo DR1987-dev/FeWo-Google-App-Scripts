@@ -689,6 +689,113 @@ function buildLodgifyItemKey_(item) {
     return `fallback:${String(arrival)}|${String(departure)}|${String(guest)}|${String(amount)}`;
 }
 
+function hasMeaningfulLodgifyValue_(value) {
+    if (value === null || value === undefined) return false;
+    if (typeof value === "string") return value.trim() !== "";
+    if (Array.isArray(value)) return value.length > 0;
+    if (value instanceof Date) return !isNaN(value.getTime());
+    if (typeof value === "object") return Object.keys(value).length > 0;
+    return true;
+}
+
+function isMergeableLodgifyObject_(value) {
+    return !!value && typeof value === "object" && !Array.isArray(value) && !(value instanceof Date);
+}
+
+function cloneLodgifyValue_(value) {
+    if (Array.isArray(value)) {
+        return value.map(cloneLodgifyValue_);
+    }
+    if (isMergeableLodgifyObject_(value)) {
+        const cloned = {};
+        Object.keys(value).forEach(function (key) {
+            cloned[key] = cloneLodgifyValue_(value[key]);
+        });
+        return cloned;
+    }
+    return value;
+}
+
+function mergeLodgifyItemData_(preferred, fallback) {
+    if (!isMergeableLodgifyObject_(preferred)) {
+        return cloneLodgifyValue_(preferred);
+    }
+    if (!isMergeableLodgifyObject_(fallback)) {
+        return cloneLodgifyValue_(preferred);
+    }
+
+    const merged = cloneLodgifyValue_(preferred);
+    Object.keys(fallback).forEach(function (key) {
+        const preferredValue = merged[key];
+        const fallbackValue = fallback[key];
+
+        if (!hasMeaningfulLodgifyValue_(preferredValue)) {
+            merged[key] = cloneLodgifyValue_(fallbackValue);
+            return;
+        }
+
+        if (isMergeableLodgifyObject_(preferredValue) && isMergeableLodgifyObject_(fallbackValue)) {
+            merged[key] = mergeLodgifyItemData_(preferredValue, fallbackValue);
+            return;
+        }
+
+        if (Array.isArray(preferredValue) && Array.isArray(fallbackValue) && preferredValue.length === 0 && fallbackValue.length > 0) {
+            merged[key] = cloneLodgifyValue_(fallbackValue);
+        }
+    });
+
+    return merged;
+}
+
+function scoreLodgifyItemCompleteness_(item) {
+    if (!item || typeof item !== "object") return 0;
+
+    let score = 0;
+    if (extractLodgifyBookingId_(item)) score += 1;
+    if (extractLodgifyGuestName_(item)) score += 5;
+    if (extractLodgifyCheckinDate_(item)) score += 5;
+    if (extractLodgifyCheckoutDate_(item)) score += 4;
+    if (extractBuchungstagDate_(item)) score += 2;
+    if (extractAmountFromPaths_(item, [
+        "total", "grandTotal", "grand_total", "totalAmount", "total_amount",
+        "price", "bookingAmount", "booking_amount", "amountToPay", "amount_to_pay",
+        "amount", "amountDue", "amount_due"
+    ], [
+        "quote.total", "quote.totalAmount", "quote.total_amount",
+        "reservation.total", "reservation.totalAmount", "reservation.total_amount",
+        "financials.total", "financials.totalAmount", "financials.total_amount",
+        "charges.total", "invoice.total"
+    ]) > 0) score += 3;
+
+    if (extractLodgifyFeesTotal_(item) > 0) score += 1;
+
+    const status = firstDefined(item, [
+        "status", "bookingStatus", "booking_status", "reservationStatus", "reservation_status", "state"
+    ]);
+    if (hasMeaningfulLodgifyValue_(status)) score += 1;
+
+    const channel = firstDefined(item, ["source", "channel", "origin", "source_text"]);
+    if (hasMeaningfulLodgifyValue_(channel)) score += 1;
+
+    const paymentOption = firstDefined(item, ["payment_option", "paymentOption"]);
+    if (hasMeaningfulLodgifyValue_(paymentOption)) score += 1;
+
+    return score;
+}
+
+function choosePreferredLodgifyItem_(existingItem, incomingItem) {
+    const existingScore = scoreLodgifyItemCompleteness_(existingItem);
+    const incomingScore = scoreLodgifyItemCompleteness_(incomingItem);
+    const preferIncoming = incomingScore > existingScore;
+    const primary = preferIncoming ? incomingItem : existingItem;
+    const secondary = preferIncoming ? existingItem : incomingItem;
+
+    return {
+        item: mergeLodgifyItemData_(primary, secondary),
+        preferred: preferIncoming ? "incoming" : "existing"
+    };
+}
+
 function dedupeBookingsById_(items) {
     const unique = [];
     const seen = {};
@@ -701,12 +808,13 @@ function dedupeBookingsById_(items) {
             return;
         }
 
-        if (seen[key]) {
+        if (seen[key] !== undefined) {
             duplicateCount++;
+            unique[seen[key]] = choosePreferredLodgifyItem_(unique[seen[key]], item).item;
             return;
         }
 
-        seen[key] = true;
+        seen[key] = unique.length;
         unique.push(item);
     });
 
@@ -733,12 +841,22 @@ function dedupeTaggedBookingsById_(taggedItems) {
             return;
         }
 
-        if (seen[key]) {
+        if (seen[key] !== undefined) {
             duplicateCount++;
+            const seenIndex = seen[key];
+            const currentEntry = unique[seenIndex];
+            const preferred = choosePreferredLodgifyItem_(currentEntry.item, item);
+            const nextSource = currentEntry.sourceEndpoint === (entry && entry.sourceEndpoint ? entry.sourceEndpoint : "unknown")
+                ? currentEntry.sourceEndpoint
+                : `${currentEntry.sourceEndpoint}+${entry && entry.sourceEndpoint ? entry.sourceEndpoint : "unknown"}`;
+            unique[seenIndex] = {
+                sourceEndpoint: nextSource,
+                item: preferred.item
+            };
             return;
         }
 
-        seen[key] = true;
+        seen[key] = unique.length;
         unique.push({
             sourceEndpoint: entry && entry.sourceEndpoint ? entry.sourceEndpoint : "unknown",
             item
