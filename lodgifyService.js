@@ -824,8 +824,9 @@ function dedupeBookingsById_(items) {
         if (seen[key] !== undefined) {
             duplicateCount++;
             const preferred = choosePreferredLodgifyItem_(unique[seen[key]], item);
-            // Für die normale Import-Deduplizierung brauchen wir nur das gemergte Item;
-            // die tagged-Variante nutzt zusätzlich `preferred`, um die Quelle zu protokollieren.
+            // Für den produktiven Import zählen nur die zusammengeführten Buchungsdaten.
+            // Wenn die Herkunft relevant ist, nutzt der Audit-Pfad `dedupeTaggedBookingsById_`
+            // und behält die bevorzugte Quelle dort separat bei.
             unique[seen[key]] = preferred.item;
             return;
         }

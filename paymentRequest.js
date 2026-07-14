@@ -219,6 +219,12 @@ function ensureAlleBuchungenSheet_(sheetName) {
     return sheet;
 }
 
+function preserveExistingAlleBuchungenCellValue_(targetRow, existingRow, columnIndex) {
+    if (!targetRow[columnIndex] && existingRow[columnIndex]) {
+        targetRow[columnIndex] = existingRow[columnIndex];
+    }
+}
+
 function extractLodgifyBookingId_(item) {
     return String(
         firstDefined(item || {}, ["id", "bookingId", "booking_id", "reservationId", "reservation_id"]) || ""
@@ -822,15 +828,9 @@ function upsertAlleBuchungenFromItems_(sheetName, items) {
             // Neue Werte übernehmen, aber ZahlungsAufforderungAktiv und
             // ZahlungsUpdateDurchgefuehrt aus dem bestehenden Eintrag beibehalten
             const newRowValues = mapped.row.slice();
-            if (!newRowValues[ALLE_BUCHUNGEN_GUEST_NAME_COL_IDX_] && existingRow[ALLE_BUCHUNGEN_GUEST_NAME_COL_IDX_]) {
-                newRowValues[ALLE_BUCHUNGEN_GUEST_NAME_COL_IDX_] = existingRow[ALLE_BUCHUNGEN_GUEST_NAME_COL_IDX_];
-            }
-            if (!newRowValues[ALLE_BUCHUNGEN_CHECKIN_COL_IDX_] && existingRow[ALLE_BUCHUNGEN_CHECKIN_COL_IDX_]) {
-                newRowValues[ALLE_BUCHUNGEN_CHECKIN_COL_IDX_] = existingRow[ALLE_BUCHUNGEN_CHECKIN_COL_IDX_];
-            }
-            if (!newRowValues[ALLE_BUCHUNGEN_CHECKOUT_COL_IDX_] && existingRow[ALLE_BUCHUNGEN_CHECKOUT_COL_IDX_]) {
-                newRowValues[ALLE_BUCHUNGEN_CHECKOUT_COL_IDX_] = existingRow[ALLE_BUCHUNGEN_CHECKOUT_COL_IDX_];
-            }
+            preserveExistingAlleBuchungenCellValue_(newRowValues, existingRow, ALLE_BUCHUNGEN_GUEST_NAME_COL_IDX_);
+            preserveExistingAlleBuchungenCellValue_(newRowValues, existingRow, ALLE_BUCHUNGEN_CHECKIN_COL_IDX_);
+            preserveExistingAlleBuchungenCellValue_(newRowValues, existingRow, ALLE_BUCHUNGEN_CHECKOUT_COL_IDX_);
             newRowValues[ALLE_BUCHUNGEN_MARKER_COL_IDX_] = existingRow[ALLE_BUCHUNGEN_MARKER_COL_IDX_];
             if (existingRow[ALLE_BUCHUNGEN_TIMESTAMP_COL_IDX_]) {
                 newRowValues[ALLE_BUCHUNGEN_TIMESTAMP_COL_IDX_] = existingRow[ALLE_BUCHUNGEN_TIMESTAMP_COL_IDX_];
