@@ -89,6 +89,7 @@ function isWithinPaymentRequestWindow_(checkinDate, daysBeforeCheckin) {
     if (isNaN(checkin.getTime())) return false;
 
     const now = new Date();
+    // Keine Zahlungsanforderung mehr für vergangene Check-ins auslösen.
     if (checkin < now) return false;
     const windowStart = new Date(checkin.getTime() - daysBeforeCheckin * 24 * 60 * 60 * 1000);
 
@@ -109,6 +110,18 @@ function hasPaymentRequestTimestamp_(value) {
 
 function getPaymentRequestBlockReason_(paymentUpdateCompleted) {
     return hasPaymentRequestTimestamp_(paymentUpdateCompleted) ? "alreadyRequested" : "";
+}
+
+function buildSkippedPaymentRequestResult_(paymentUpdateCompleted) {
+    const blockReason = getPaymentRequestBlockReason_(paymentUpdateCompleted);
+    if (!blockReason) return null;
+
+    return {
+        ok: true,
+        skipped: true,
+        reason: blockReason,
+        requestedAt: paymentUpdateCompleted
+    };
 }
 
 function buildPaymentRequestTimestamp_() {
@@ -137,9 +150,9 @@ function evaluateAutomaticPaymentRequest_(booking, paymentUpdateCompleted, confi
         return { shouldRequest: false, reason: "missingBooking" };
     }
 
-    const blockReason = getPaymentRequestBlockReason_(paymentUpdateCompleted);
-    if (blockReason) {
-        return { shouldRequest: false, reason: blockReason };
+    const skippedRequest = buildSkippedPaymentRequestResult_(paymentUpdateCompleted);
+    if (skippedRequest) {
+        return { shouldRequest: false, reason: skippedRequest.reason };
     }
 
     const isExternal = toBoolean(firstDefined(booking, ["is_external", "isExternal", "external"]));
@@ -737,14 +750,9 @@ function updateLodgifyEditableBookingRow_(sheetName, rowNo, booking) {
     let paymentTriggerResult = null;
 
     if (shouldTriggerLodgifyPaymentUpdate_(booking || {})) {
-        const blockReason = getPaymentRequestBlockReason_(merged.payment_update_completed);
-        if (blockReason) {
-            paymentTriggerResult = {
-                ok: true,
-                skipped: true,
-                reason: blockReason,
-                requestedAt: merged.payment_update_completed
-            };
+        const skippedRequest = buildSkippedPaymentRequestResult_(merged.payment_update_completed);
+        if (skippedRequest) {
+            paymentTriggerResult = skippedRequest;
         } else {
             paymentTriggerResult = triggerLodgifyPaymentUpdate_(merged);
             updateSheetRowByHeaders(sheetName, rowNo, [{
@@ -1020,6 +1028,9 @@ function applyPaymentRequestUpdates_(sheetName, itemsById, config) {
 
         const sheetRow = i + 1; // 1-basiert
         const paymentTriggerResult = triggerLodgifyPaymentUpdate_(booking);
+        if (!paymentTriggerResult || paymentTriggerResult.ok !== true) {
+            throw new Error(`Lodgify Zahlungsanforderung für Buchung ${bookingId} fehlgeschlagen: ${JSON.stringify(paymentTriggerResult || {})}`);
+        }
 
         if (timestampColIdx !== -1) {
             sheet.getRange(sheetRow, timestampColIdx + 1).setValue(
