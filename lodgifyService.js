@@ -747,15 +747,28 @@ function mergeLodgifyItemData_(preferred, fallback) {
     return merged;
 }
 
+var LODGIFY_ITEM_COMPLETENESS_WEIGHTS_ = {
+    bookingId: 1,
+    guestName: 5,
+    checkin: 5,
+    checkout: 4,
+    bookingDate: 2,
+    amount: 3,
+    fees: 1,
+    status: 1,
+    channel: 1,
+    paymentOption: 1
+};
+
 function scoreLodgifyItemCompleteness_(item) {
     if (!item || typeof item !== "object") return 0;
 
     let score = 0;
-    if (extractLodgifyBookingId_(item)) score += 1;
-    if (extractLodgifyGuestName_(item)) score += 5;
-    if (extractLodgifyCheckinDate_(item)) score += 5;
-    if (extractLodgifyCheckoutDate_(item)) score += 4;
-    if (extractBuchungstagDate_(item)) score += 2;
+    if (extractLodgifyBookingId_(item)) score += LODGIFY_ITEM_COMPLETENESS_WEIGHTS_.bookingId;
+    if (extractLodgifyGuestName_(item)) score += LODGIFY_ITEM_COMPLETENESS_WEIGHTS_.guestName;
+    if (extractLodgifyCheckinDate_(item)) score += LODGIFY_ITEM_COMPLETENESS_WEIGHTS_.checkin;
+    if (extractLodgifyCheckoutDate_(item)) score += LODGIFY_ITEM_COMPLETENESS_WEIGHTS_.checkout;
+    if (extractBuchungstagDate_(item)) score += LODGIFY_ITEM_COMPLETENESS_WEIGHTS_.bookingDate;
     if (extractAmountFromPaths_(item, [
         "total", "grandTotal", "grand_total", "totalAmount", "total_amount",
         "price", "bookingAmount", "booking_amount", "amountToPay", "amount_to_pay",
@@ -765,20 +778,20 @@ function scoreLodgifyItemCompleteness_(item) {
         "reservation.total", "reservation.totalAmount", "reservation.total_amount",
         "financials.total", "financials.totalAmount", "financials.total_amount",
         "charges.total", "invoice.total"
-    ]) > 0) score += 3;
+    ]) > 0) score += LODGIFY_ITEM_COMPLETENESS_WEIGHTS_.amount;
 
-    if (extractLodgifyFeesTotal_(item) > 0) score += 1;
+    if (extractLodgifyFeesTotal_(item) > 0) score += LODGIFY_ITEM_COMPLETENESS_WEIGHTS_.fees;
 
     const status = firstDefined(item, [
         "status", "bookingStatus", "booking_status", "reservationStatus", "reservation_status", "state"
     ]);
-    if (hasMeaningfulLodgifyValue_(status)) score += 1;
+    if (hasMeaningfulLodgifyValue_(status)) score += LODGIFY_ITEM_COMPLETENESS_WEIGHTS_.status;
 
     const channel = firstDefined(item, ["source", "channel", "origin", "source_text"]);
-    if (hasMeaningfulLodgifyValue_(channel)) score += 1;
+    if (hasMeaningfulLodgifyValue_(channel)) score += LODGIFY_ITEM_COMPLETENESS_WEIGHTS_.channel;
 
     const paymentOption = firstDefined(item, ["payment_option", "paymentOption"]);
-    if (hasMeaningfulLodgifyValue_(paymentOption)) score += 1;
+    if (hasMeaningfulLodgifyValue_(paymentOption)) score += LODGIFY_ITEM_COMPLETENESS_WEIGHTS_.paymentOption;
 
     return score;
 }
@@ -810,7 +823,10 @@ function dedupeBookingsById_(items) {
 
         if (seen[key] !== undefined) {
             duplicateCount++;
-            unique[seen[key]] = choosePreferredLodgifyItem_(unique[seen[key]], item).item;
+            const preferred = choosePreferredLodgifyItem_(unique[seen[key]], item);
+            // Für die normale Import-Deduplizierung brauchen wir nur das gemergte Item;
+            // die tagged-Variante nutzt zusätzlich `preferred`, um die Quelle zu protokollieren.
+            unique[seen[key]] = preferred.item;
             return;
         }
 
