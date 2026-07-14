@@ -693,7 +693,7 @@ function hasMeaningfulLodgifyValue_(value) {
     if (value === null || value === undefined) return false;
     if (typeof value === "string") return value.trim() !== "";
     if (Array.isArray(value)) return value.length > 0;
-    if (value instanceof Date) return !isNaN(value.getTime());
+    if (value instanceof Date) return isFinite(value.getTime());
     if (typeof value === "object") return Object.keys(value).length > 0;
     return true;
 }
@@ -1290,7 +1290,8 @@ function extractLodgifyGuestName_(item) {
         ["first_name", "last_name"]
     ];
 
-    for (const pair of namePathPairs) {
+    for (let i = 0; i < namePathPairs.length; i++) {
+        const pair = namePathPairs[i];
         const first = String(getByPath_(item, pair[0]) || "").trim();
         const last = String(getByPath_(item, pair[1]) || "").trim();
         const combined = `${first} ${last}`.trim();
