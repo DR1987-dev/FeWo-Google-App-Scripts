@@ -846,9 +846,10 @@ function dedupeTaggedBookingsById_(taggedItems) {
             const seenIndex = seen[key];
             const currentEntry = unique[seenIndex];
             const preferred = choosePreferredLodgifyItem_(currentEntry.item, item);
-            const nextSource = currentEntry.sourceEndpoint === (entry && entry.sourceEndpoint ? entry.sourceEndpoint : "unknown")
+            const incomingSource = entry && entry.sourceEndpoint ? entry.sourceEndpoint : "unknown";
+            const nextSource = currentEntry.sourceEndpoint === incomingSource
                 ? currentEntry.sourceEndpoint
-                : `${currentEntry.sourceEndpoint}+${entry && entry.sourceEndpoint ? entry.sourceEndpoint : "unknown"}`;
+                : `${currentEntry.sourceEndpoint}+${incomingSource}`;
             unique[seenIndex] = {
                 sourceEndpoint: nextSource,
                 item: preferred.item
