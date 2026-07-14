@@ -44,6 +44,9 @@ var ALLE_BUCHUNGEN_MARKER_COL_IDX_ = 8;
 
 // 0-basierter Index der "ZahlungsUpdateDurchgefuehrt"-Spalte
 var ALLE_BUCHUNGEN_TIMESTAMP_COL_IDX_ = 13;
+var ALLE_BUCHUNGEN_GUEST_NAME_COL_IDX_ = 1;
+var ALLE_BUCHUNGEN_CHECKIN_COL_IDX_ = 2;
+var ALLE_BUCHUNGEN_CHECKOUT_COL_IDX_ = 3;
 
 /**
  * Wandelt einen Wert in einen Boolean um.
@@ -214,6 +217,12 @@ function ensureAlleBuchungenSheet_(sheetName) {
     }
 
     return sheet;
+}
+
+function preserveExistingAlleBuchungenCellValue_(targetRow, existingRow, columnIndex) {
+    if (!targetRow[columnIndex] && existingRow[columnIndex]) {
+        targetRow[columnIndex] = existingRow[columnIndex];
+    }
 }
 
 function extractLodgifyBookingId_(item) {
@@ -678,28 +687,9 @@ function mapLodgifyItemToAlleBuchungenRow_(item) {
     const id = extractLodgifyBookingId_(item);
     if (!id) return null;
 
-    const guestName = String(
-        firstDefined(item, [
-            "guestName", "guest_name", "customerName", "customer_name",
-            "tenantName", "tenant_name", "name"
-        ]) || ""
-    ).trim();
-
-    const checkinDate = parseDateOrNull(
-        firstDefined(item, [
-            "checkIn", "check_in", "checkInDate", "check_in_date",
-            "arrival", "arrivalDate", "arrival_date",
-            "startDate", "start_date", "from", "dateFrom", "date_from"
-        ])
-    );
-
-    const checkoutDate = parseDateOrNull(
-        firstDefined(item, [
-            "checkOut", "check_out", "checkOutDate", "check_out_date",
-            "departure", "departureDate", "departure_date",
-            "endDate", "end_date", "to", "dateTo", "date_to"
-        ])
-    );
+    const guestName = extractLodgifyGuestName_(item);
+    const checkinDate = extractLodgifyCheckinDate_(item);
+    const checkoutDate = extractLodgifyCheckoutDate_(item);
 
     const amount = extractAmountFromPaths_(item, [
         "total", "grandTotal", "grand_total", "totalAmount", "total_amount",
@@ -838,6 +828,9 @@ function upsertAlleBuchungenFromItems_(sheetName, items) {
             // Neue Werte übernehmen, aber ZahlungsAufforderungAktiv und
             // ZahlungsUpdateDurchgefuehrt aus dem bestehenden Eintrag beibehalten
             const newRowValues = mapped.row.slice();
+            preserveExistingAlleBuchungenCellValue_(newRowValues, existingRow, ALLE_BUCHUNGEN_GUEST_NAME_COL_IDX_);
+            preserveExistingAlleBuchungenCellValue_(newRowValues, existingRow, ALLE_BUCHUNGEN_CHECKIN_COL_IDX_);
+            preserveExistingAlleBuchungenCellValue_(newRowValues, existingRow, ALLE_BUCHUNGEN_CHECKOUT_COL_IDX_);
             newRowValues[ALLE_BUCHUNGEN_MARKER_COL_IDX_] = existingRow[ALLE_BUCHUNGEN_MARKER_COL_IDX_];
             if (existingRow[ALLE_BUCHUNGEN_TIMESTAMP_COL_IDX_]) {
                 newRowValues[ALLE_BUCHUNGEN_TIMESTAMP_COL_IDX_] = existingRow[ALLE_BUCHUNGEN_TIMESTAMP_COL_IDX_];

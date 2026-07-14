@@ -680,11 +680,133 @@ function buildLodgifyItemKey_(item) {
         return `id:${String(id).trim()}`;
     }
 
-    const arrival = firstDefined(item, ["arrival", "arrivalDate", "arrival_date", "checkIn", "check_in"]) || "";
-    const departure = firstDefined(item, ["departure", "departureDate", "departure_date", "checkOut", "check_out"]) || "";
-    const guest = firstDefined(item, ["guestName", "guest_name", "customerName", "customer_name"]) || "";
+    const arrivalDate = extractLodgifyCheckinDate_(item);
+    const departureDate = extractLodgifyCheckoutDate_(item);
+    const arrival = arrivalDate ? arrivalDate.toISOString() : "";
+    const departure = departureDate ? departureDate.toISOString() : "";
+    const guest = extractLodgifyGuestName_(item) || "";
     const amount = firstDefined(item, ["total", "totalAmount", "total_amount", "amount", "amountPaid", "amount_paid"]) || "";
     return `fallback:${String(arrival)}|${String(departure)}|${String(guest)}|${String(amount)}`;
+}
+
+function hasMeaningfulLodgifyValue_(value) {
+    if (value === null || value === undefined) return false;
+    if (typeof value === "string") return value.trim() !== "";
+    if (Array.isArray(value)) return value.length > 0;
+    if (value instanceof Date) return isFinite(value.getTime());
+    if (typeof value === "object") return Object.keys(value).length > 0;
+    return true;
+}
+
+function isMergeableLodgifyObject_(value) {
+    return !!value && typeof value === "object" && !Array.isArray(value) && !(value instanceof Date);
+}
+
+function cloneLodgifyValue_(value) {
+    if (Array.isArray(value)) {
+        return value.map(cloneLodgifyValue_);
+    }
+    if (isMergeableLodgifyObject_(value)) {
+        const cloned = {};
+        Object.keys(value).forEach(function (key) {
+            cloned[key] = cloneLodgifyValue_(value[key]);
+        });
+        return cloned;
+    }
+    return value;
+}
+
+function mergeLodgifyItemData_(preferred, fallback) {
+    if (!isMergeableLodgifyObject_(preferred)) {
+        return cloneLodgifyValue_(preferred);
+    }
+    if (!isMergeableLodgifyObject_(fallback)) {
+        return cloneLodgifyValue_(preferred);
+    }
+
+    const merged = cloneLodgifyValue_(preferred);
+    Object.keys(fallback).forEach(function (key) {
+        const preferredValue = merged[key];
+        const fallbackValue = fallback[key];
+
+        if (!hasMeaningfulLodgifyValue_(preferredValue)) {
+            merged[key] = cloneLodgifyValue_(fallbackValue);
+            return;
+        }
+
+        if (isMergeableLodgifyObject_(preferredValue) && isMergeableLodgifyObject_(fallbackValue)) {
+            merged[key] = mergeLodgifyItemData_(preferredValue, fallbackValue);
+            return;
+        }
+
+        if (Array.isArray(preferredValue) && Array.isArray(fallbackValue) && preferredValue.length === 0 && fallbackValue.length > 0) {
+            merged[key] = cloneLodgifyValue_(fallbackValue);
+        }
+    });
+
+    return merged;
+}
+
+var LODGIFY_ITEM_COMPLETENESS_WEIGHTS_ = {
+    bookingId: 1,
+    guestName: 5,
+    checkin: 5,
+    checkout: 4,
+    bookingDate: 2,
+    amount: 3,
+    fees: 1,
+    status: 1,
+    channel: 1,
+    paymentOption: 1
+};
+
+function scoreLodgifyItemCompleteness_(item) {
+    if (!item || typeof item !== "object") return 0;
+
+    let score = 0;
+    if (extractLodgifyBookingId_(item)) score += LODGIFY_ITEM_COMPLETENESS_WEIGHTS_.bookingId;
+    if (extractLodgifyGuestName_(item)) score += LODGIFY_ITEM_COMPLETENESS_WEIGHTS_.guestName;
+    if (extractLodgifyCheckinDate_(item)) score += LODGIFY_ITEM_COMPLETENESS_WEIGHTS_.checkin;
+    if (extractLodgifyCheckoutDate_(item)) score += LODGIFY_ITEM_COMPLETENESS_WEIGHTS_.checkout;
+    if (extractBuchungstagDate_(item)) score += LODGIFY_ITEM_COMPLETENESS_WEIGHTS_.bookingDate;
+    if (extractAmountFromPaths_(item, [
+        "total", "grandTotal", "grand_total", "totalAmount", "total_amount",
+        "price", "bookingAmount", "booking_amount", "amountToPay", "amount_to_pay",
+        "amount", "amountDue", "amount_due"
+    ], [
+        "quote.total", "quote.totalAmount", "quote.total_amount",
+        "reservation.total", "reservation.totalAmount", "reservation.total_amount",
+        "financials.total", "financials.totalAmount", "financials.total_amount",
+        "charges.total", "invoice.total"
+    ]) > 0) score += LODGIFY_ITEM_COMPLETENESS_WEIGHTS_.amount;
+
+    if (extractLodgifyFeesTotal_(item) > 0) score += LODGIFY_ITEM_COMPLETENESS_WEIGHTS_.fees;
+
+    const status = firstDefined(item, [
+        "status", "bookingStatus", "booking_status", "reservationStatus", "reservation_status", "state"
+    ]);
+    if (hasMeaningfulLodgifyValue_(status)) score += LODGIFY_ITEM_COMPLETENESS_WEIGHTS_.status;
+
+    const channel = firstDefined(item, ["source", "channel", "origin", "source_text"]);
+    if (hasMeaningfulLodgifyValue_(channel)) score += LODGIFY_ITEM_COMPLETENESS_WEIGHTS_.channel;
+
+    const paymentOption = firstDefined(item, ["payment_option", "paymentOption"]);
+    if (hasMeaningfulLodgifyValue_(paymentOption)) score += LODGIFY_ITEM_COMPLETENESS_WEIGHTS_.paymentOption;
+
+    return score;
+}
+
+function choosePreferredLodgifyItem_(existingItem, incomingItem) {
+    const existingScore = scoreLodgifyItemCompleteness_(existingItem);
+    const incomingScore = scoreLodgifyItemCompleteness_(incomingItem);
+    const preferIncoming = incomingScore > existingScore;
+    const primary = preferIncoming ? incomingItem : existingItem;
+    const secondary = preferIncoming ? existingItem : incomingItem;
+
+    return {
+        item: mergeLodgifyItemData_(primary, secondary),
+        preferred: preferIncoming ? "incoming" : "existing"
+    };
 }
 
 function dedupeBookingsById_(items) {
@@ -699,12 +821,17 @@ function dedupeBookingsById_(items) {
             return;
         }
 
-        if (seen[key]) {
+        if (seen[key] !== undefined) {
             duplicateCount++;
+            const preferred = choosePreferredLodgifyItem_(unique[seen[key]], item);
+            // Für den produktiven Import zählen nur die zusammengeführten Buchungsdaten.
+            // Wenn die Herkunft relevant ist, nutzt der Audit-Pfad `dedupeTaggedBookingsById_`
+            // und behält die bevorzugte Quelle dort separat bei.
+            unique[seen[key]] = preferred.item;
             return;
         }
 
-        seen[key] = true;
+        seen[key] = unique.length;
         unique.push(item);
     });
 
@@ -731,12 +858,23 @@ function dedupeTaggedBookingsById_(taggedItems) {
             return;
         }
 
-        if (seen[key]) {
+        if (seen[key] !== undefined) {
             duplicateCount++;
+            const seenIndex = seen[key];
+            const currentEntry = unique[seenIndex];
+            const preferred = choosePreferredLodgifyItem_(currentEntry.item, item);
+            const incomingSource = entry && entry.sourceEndpoint ? entry.sourceEndpoint : "unknown";
+            const nextSource = currentEntry.sourceEndpoint === incomingSource
+                ? currentEntry.sourceEndpoint
+                : `${currentEntry.sourceEndpoint}+${incomingSource}`;
+            unique[seenIndex] = {
+                sourceEndpoint: nextSource,
+                item: preferred.item
+            };
             return;
         }
 
-        seen[key] = true;
+        seen[key] = unique.length;
         unique.push({
             sourceEndpoint: entry && entry.sourceEndpoint ? entry.sourceEndpoint : "unknown",
             item
@@ -1057,6 +1195,54 @@ function extractWertstellungDate_(item) {
     return null;
 }
 
+function extractLodgifyCheckinDate_(item) {
+    const directValue = firstDefined(item || {}, [
+        "checkIn", "check_in", "checkInDate", "check_in_date",
+        "arrival", "arrivalDate", "arrival_date", "dateArrival", "date_arrival",
+        "startDate", "start_date", "from", "dateFrom", "date_from"
+    ]);
+    const directDate = parseDateOrNull(directValue);
+    if (directDate) return directDate;
+
+    const nestedValue = firstDefinedDeep(item || {}, [
+        "reservation.arrival", "reservation.arrivalDate", "reservation.arrival_date",
+        "reservation.checkIn", "reservation.check_in", "reservation.startDate", "reservation.start_date",
+        "reservation.from", "reservation.dateFrom", "reservation.date_from",
+        "booking.arrival", "booking.arrivalDate", "booking.arrival_date",
+        "booking.checkIn", "booking.check_in", "booking.startDate", "booking.start_date",
+        "booking.from", "booking.dateFrom", "booking.date_from",
+        "period.from", "period.start", "stay.from", "stay.start", "dates.arrival", "dates.checkIn"
+    ]);
+    const nestedDate = parseDateOrNull(nestedValue);
+    if (nestedDate) return nestedDate;
+
+    return null;
+}
+
+function extractLodgifyCheckoutDate_(item) {
+    const directValue = firstDefined(item || {}, [
+        "checkOut", "check_out", "checkOutDate", "check_out_date",
+        "departure", "departureDate", "departure_date", "dateDeparture", "date_departure",
+        "endDate", "end_date", "to", "dateTo", "date_to"
+    ]);
+    const directDate = parseDateOrNull(directValue);
+    if (directDate) return directDate;
+
+    const nestedValue = firstDefinedDeep(item || {}, [
+        "reservation.departure", "reservation.departureDate", "reservation.departure_date",
+        "reservation.checkOut", "reservation.check_out", "reservation.endDate", "reservation.end_date",
+        "reservation.to", "reservation.dateTo", "reservation.date_to",
+        "booking.departure", "booking.departureDate", "booking.departure_date",
+        "booking.checkOut", "booking.check_out", "booking.endDate", "booking.end_date",
+        "booking.to", "booking.dateTo", "booking.date_to",
+        "period.to", "period.end", "stay.to", "stay.end", "dates.departure", "dates.checkOut"
+    ]);
+    const nestedDate = parseDateOrNull(nestedValue);
+    if (nestedDate) return nestedDate;
+
+    return null;
+}
+
 function extractBuchungstagDate_(item) {
     const directValue = firstDefined(item, [
         "bookingDate", "booking_date", "createdAt", "created_at", "updatedAt", "updated_at",
@@ -1075,6 +1261,61 @@ function extractBuchungstagDate_(item) {
     if (nestedDate) return nestedDate;
 
     return findFirstParsableDateByKeyHint_(item, ["booking", "created", "payment", "paid", "date"]);
+}
+
+function extractLodgifyGuestName_(item) {
+    if (!item || typeof item !== "object") return "";
+
+    const directName = firstDefined(item, [
+        "guestName", "guest_name", "customerName", "customer_name",
+        "tenantName", "tenant_name", "name", "guest"
+    ]);
+    if (directName !== null && directName !== undefined && directName !== "") {
+        return String(directName).trim();
+    }
+
+    const nestedName = firstDefinedDeep(item, [
+        "guest.name", "guest.fullName", "guest.full_name",
+        "customer.name", "customer.fullName", "customer.full_name",
+        "tenant.name", "tenant.fullName", "tenant.full_name",
+        "contact.name", "contact.fullName", "contact.full_name",
+        "leadGuest.name", "leadGuest.fullName", "leadGuest.full_name",
+        "booker.name", "booker.fullName", "booker.full_name",
+        "reservation.guestName", "reservation.guest_name",
+        "reservation.customerName", "reservation.customer_name",
+        "booking.guestName", "booking.guest_name",
+        "booking.customerName", "booking.customer_name"
+    ]);
+    if (nestedName !== null && nestedName !== undefined && nestedName !== "") {
+        return String(nestedName).trim();
+    }
+
+    const namePathPairs = [
+        ["guest.firstName", "guest.lastName"],
+        ["guest.first_name", "guest.last_name"],
+        ["customer.firstName", "customer.lastName"],
+        ["customer.first_name", "customer.last_name"],
+        ["tenant.firstName", "tenant.lastName"],
+        ["tenant.first_name", "tenant.last_name"],
+        ["contact.firstName", "contact.lastName"],
+        ["contact.first_name", "contact.last_name"],
+        ["leadGuest.firstName", "leadGuest.lastName"],
+        ["leadGuest.first_name", "leadGuest.last_name"],
+        ["booker.firstName", "booker.lastName"],
+        ["booker.first_name", "booker.last_name"],
+        ["firstName", "lastName"],
+        ["first_name", "last_name"]
+    ];
+
+    for (let i = 0; i < namePathPairs.length; i++) {
+        const pair = namePathPairs[i];
+        const first = String(getByPath_(item, pair[0]) || "").trim();
+        const last = String(getByPath_(item, pair[1]) || "").trim();
+        const combined = `${first} ${last}`.trim();
+        if (combined) return combined;
+    }
+
+    return "";
 }
 
 function findFirstParsableDateByKeyHint_(obj, keyHints) {
