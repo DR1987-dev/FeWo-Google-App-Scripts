@@ -49,6 +49,15 @@ var ALLE_BUCHUNGEN_GUEST_NAME_COL_IDX_ = 1;
 var ALLE_BUCHUNGEN_CHECKIN_COL_IDX_ = 2;
 var ALLE_BUCHUNGEN_CHECKOUT_COL_IDX_ = 3;
 var ALLE_BUCHUNGEN_STATUS_COL_IDX_ = ALLE_BUCHUNGEN_HEADERS_.indexOf("Status");
+var DECLINED_OR_CANCELLED_STATUS_PATTERNS_ = [
+    /\bcancel(?:ed|led)\b/,
+    /\bdeclin(?:e|ed)\b/,
+    /\breject(?:ed|ion)?\b/,
+    /\bdenied\b/,
+    /\bstorniert\b/,
+    /\babgelehnt\b/,
+    /\babgesagt\b/
+];
 
 /**
  * Wandelt einen Wert in einen Boolean um.
@@ -323,17 +332,8 @@ function isDeclinedOrCancelledStatusText_(status) {
     const normalized = String(status || "").trim().toLowerCase();
     if (!normalized) return false;
 
-    const blockedPatterns = [
-        /\bcancel(?:ed|led)\b/,
-        /\bdeclin(?:e|ed)\b/,
-        /\breject(?:ed|ion)?\b/,
-        /\bdenied\b/,
-        /\bstorniert\b/,
-        /\babgelehnt\b/,
-        /\babgesagt\b/
-    ];
-    for (let i = 0; i < blockedPatterns.length; i++) {
-        if (blockedPatterns[i].test(normalized)) return true;
+    for (let i = 0; i < DECLINED_OR_CANCELLED_STATUS_PATTERNS_.length; i++) {
+        if (DECLINED_OR_CANCELLED_STATUS_PATTERNS_[i].test(normalized)) return true;
     }
 
     return false;
