@@ -1216,7 +1216,7 @@ function extractLodgifyCheckinDate_(item) {
     const nestedDate = parseDateOrNull(nestedValue);
     if (nestedDate) return nestedDate;
 
-    return null;
+    return findFirstParsableDateByKeyHint_(item || {}, ["arrival", "checkin", "start", "from"]);
 }
 
 function extractLodgifyCheckoutDate_(item) {
@@ -1240,7 +1240,7 @@ function extractLodgifyCheckoutDate_(item) {
     const nestedDate = parseDateOrNull(nestedValue);
     if (nestedDate) return nestedDate;
 
-    return null;
+    return findFirstParsableDateByKeyHint_(item || {}, ["departure", "checkout", "end", "to"]);
 }
 
 function extractBuchungstagDate_(item) {
@@ -1268,13 +1268,18 @@ function extractLodgifyGuestName_(item) {
 
     const directName = firstDefined(item, [
         "guestName", "guest_name", "customerName", "customer_name",
-        "tenantName", "tenant_name", "name", "guest"
+        "tenantName", "tenant_name", "name"
     ]);
-    if (directName !== null && directName !== undefined && directName !== "") {
-        return String(directName).trim();
-    }
+    const normalizedDirectName = normalizeGuestNameValue_(directName);
+    if (normalizedDirectName) return normalizedDirectName;
+
+    const directGuestObject = firstDefined(item, ["guest", "customer", "tenant", "contact", "leadGuest", "booker"]);
+    const normalizedDirectGuestObjectName = normalizeGuestNameValue_(directGuestObject);
+    if (normalizedDirectGuestObjectName) return normalizedDirectGuestObjectName;
 
     const nestedName = firstDefinedDeep(item, [
+        "guest.guest_name.full_name", "guest.guest_name.fullName", "guest.guest_name.name",
+        "guest.guest_name.first_name", "guest.guest_name.firstName",
         "guest.name", "guest.fullName", "guest.full_name",
         "customer.name", "customer.fullName", "customer.full_name",
         "tenant.name", "tenant.fullName", "tenant.full_name",
@@ -1286,9 +1291,8 @@ function extractLodgifyGuestName_(item) {
         "booking.guestName", "booking.guest_name",
         "booking.customerName", "booking.customer_name"
     ]);
-    if (nestedName !== null && nestedName !== undefined && nestedName !== "") {
-        return String(nestedName).trim();
-    }
+    const normalizedNestedName = normalizeGuestNameValue_(nestedName);
+    if (normalizedNestedName) return normalizedNestedName;
 
     const namePathPairs = [
         ["guest.firstName", "guest.lastName"],
@@ -1312,6 +1316,36 @@ function extractLodgifyGuestName_(item) {
         const first = String(getByPath_(item, pair[0]) || "").trim();
         const last = String(getByPath_(item, pair[1]) || "").trim();
         const combined = `${first} ${last}`.trim();
+        if (combined) return combined;
+    }
+
+    return "";
+}
+
+function normalizeGuestNameValue_(value) {
+    if (value === null || value === undefined || value === "") return "";
+
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+        return String(value).trim();
+    }
+
+    if (typeof value === "object") {
+        const directName = firstDefined(value, ["name", "fullName", "full_name", "displayName", "display_name"]);
+        if (directName !== null && directName !== undefined && directName !== "") {
+            return String(directName).trim();
+        }
+
+        const nestedName = firstDefinedDeep(value, [
+            "guest_name.full_name", "guest_name.fullName", "guest_name.name",
+            "profile.full_name", "profile.fullName", "profile.name"
+        ]);
+        if (nestedName !== null && nestedName !== undefined && nestedName !== "") {
+            return String(nestedName).trim();
+        }
+
+        const firstName = firstDefined(value, ["firstName", "first_name"]);
+        const lastName = firstDefined(value, ["lastName", "last_name"]);
+        const combined = `${String(firstName || "").trim()} ${String(lastName || "").trim()}`.trim();
         if (combined) return combined;
     }
 
