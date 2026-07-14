@@ -48,7 +48,7 @@ var ALLE_BUCHUNGEN_TIMESTAMP_COL_IDX_ = 13;
 var ALLE_BUCHUNGEN_GUEST_NAME_COL_IDX_ = 1;
 var ALLE_BUCHUNGEN_CHECKIN_COL_IDX_ = 2;
 var ALLE_BUCHUNGEN_CHECKOUT_COL_IDX_ = 3;
-var ALLE_BUCHUNGEN_STATUS_COL_IDX_ = 5;
+var ALLE_BUCHUNGEN_STATUS_COL_IDX_ = ALLE_BUCHUNGEN_HEADERS_.indexOf("Status");
 
 /**
  * Wandelt einen Wert in einen Boolean um.
@@ -324,8 +324,8 @@ function isDeclinedOrCancelledStatusText_(status) {
     if (!normalized) return false;
 
     const blockedPatterns = [
-        /\bcancel(?:l?ed)\b/,
-        /\bdeclin(?:e|ed)?\b/,
+        /\bcancel(?:ed|led)\b/,
+        /\bdeclin(?:e|ed)\b/,
         /\breject(?:ed|ion)?\b/,
         /\bdenied\b/,
         /\bstorniert\b/,
