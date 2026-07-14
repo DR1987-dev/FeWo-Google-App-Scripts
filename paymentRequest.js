@@ -89,7 +89,7 @@ function isWithinPaymentRequestWindow_(checkinDate, daysBeforeCheckin) {
     if (isNaN(checkin.getTime())) return false;
 
     const now = new Date();
-    if (checkin <= now) return false;
+    if (checkin < now) return false;
     const windowStart = new Date(checkin.getTime() - daysBeforeCheckin * 24 * 60 * 60 * 1000);
 
     // Auslösen wenn: jetzt >= Fensteranfang (d.h. wir sind im Fenster oder danach)
@@ -104,7 +104,11 @@ function parsePositiveNumber_(value) {
 }
 
 function hasPaymentRequestTimestamp_(value) {
-    return String(value === null || value === undefined ? "" : value).trim() !== "";
+    return String(value || "").trim() !== "";
+}
+
+function getPaymentRequestBlockReason_(paymentUpdateCompleted) {
+    return hasPaymentRequestTimestamp_(paymentUpdateCompleted) ? "alreadyRequested" : "";
 }
 
 function buildPaymentRequestTimestamp_() {
@@ -133,8 +137,9 @@ function evaluateAutomaticPaymentRequest_(booking, paymentUpdateCompleted, confi
         return { shouldRequest: false, reason: "missingBooking" };
     }
 
-    if (hasPaymentRequestTimestamp_(paymentUpdateCompleted)) {
-        return { shouldRequest: false, reason: "alreadyRequested" };
+    const blockReason = getPaymentRequestBlockReason_(paymentUpdateCompleted);
+    if (blockReason) {
+        return { shouldRequest: false, reason: blockReason };
     }
 
     const isExternal = toBoolean(firstDefined(booking, ["is_external", "isExternal", "external"]));
@@ -732,11 +737,12 @@ function updateLodgifyEditableBookingRow_(sheetName, rowNo, booking) {
     let paymentTriggerResult = null;
 
     if (shouldTriggerLodgifyPaymentUpdate_(booking || {})) {
-        if (hasPaymentRequestTimestamp_(merged.payment_update_completed)) {
+        const blockReason = getPaymentRequestBlockReason_(merged.payment_update_completed);
+        if (blockReason) {
             paymentTriggerResult = {
                 ok: true,
                 skipped: true,
-                reason: "alreadyRequested",
+                reason: blockReason,
                 requestedAt: merged.payment_update_completed
             };
         } else {
@@ -1014,9 +1020,6 @@ function applyPaymentRequestUpdates_(sheetName, itemsById, config) {
 
         const sheetRow = i + 1; // 1-basiert
         const paymentTriggerResult = triggerLodgifyPaymentUpdate_(booking);
-        if (!paymentTriggerResult || paymentTriggerResult.ok !== true) {
-            throw new Error(`Lodgify Zahlungsanforderung für Buchung ${bookingId} wurde nicht bestätigt.`);
-        }
 
         if (timestampColIdx !== -1) {
             sheet.getRange(sheetRow, timestampColIdx + 1).setValue(
