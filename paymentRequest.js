@@ -103,7 +103,7 @@ function parsePositiveNumber_(value) {
     return normalized;
 }
 
-function hasPaymentRequestBeenCompleted_(value) {
+function hasPaymentRequestTimestamp_(value) {
     return String(value === null || value === undefined ? "" : value).trim() !== "";
 }
 
@@ -133,7 +133,7 @@ function evaluateAutomaticPaymentRequest_(booking, paymentUpdateCompleted, confi
         return { shouldRequest: false, reason: "missingBooking" };
     }
 
-    if (hasPaymentRequestBeenCompleted_(paymentUpdateCompleted)) {
+    if (hasPaymentRequestTimestamp_(paymentUpdateCompleted)) {
         return { shouldRequest: false, reason: "alreadyRequested" };
     }
 
@@ -732,7 +732,7 @@ function updateLodgifyEditableBookingRow_(sheetName, rowNo, booking) {
     let paymentTriggerResult = null;
 
     if (shouldTriggerLodgifyPaymentUpdate_(booking || {})) {
-        if (hasPaymentRequestBeenCompleted_(merged.payment_update_completed)) {
+        if (hasPaymentRequestTimestamp_(merged.payment_update_completed)) {
             paymentTriggerResult = {
                 ok: true,
                 skipped: true,
@@ -1013,7 +1013,10 @@ function applyPaymentRequestUpdates_(sheetName, itemsById, config) {
         }
 
         const sheetRow = i + 1; // 1-basiert
-        triggerLodgifyPaymentUpdate_(booking);
+        const paymentTriggerResult = triggerLodgifyPaymentUpdate_(booking);
+        if (!paymentTriggerResult || paymentTriggerResult.ok !== true) {
+            throw new Error(`Lodgify Zahlungsanforderung für Buchung ${bookingId} wurde nicht bestätigt.`);
+        }
 
         if (timestampColIdx !== -1) {
             sheet.getRange(sheetRow, timestampColIdx + 1).setValue(
