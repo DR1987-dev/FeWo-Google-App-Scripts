@@ -678,28 +678,9 @@ function mapLodgifyItemToAlleBuchungenRow_(item) {
     const id = extractLodgifyBookingId_(item);
     if (!id) return null;
 
-    const guestName = String(
-        firstDefined(item, [
-            "guestName", "guest_name", "customerName", "customer_name",
-            "tenantName", "tenant_name", "name"
-        ]) || ""
-    ).trim();
-
-    const checkinDate = parseDateOrNull(
-        firstDefined(item, [
-            "checkIn", "check_in", "checkInDate", "check_in_date",
-            "arrival", "arrivalDate", "arrival_date",
-            "startDate", "start_date", "from", "dateFrom", "date_from"
-        ])
-    );
-
-    const checkoutDate = parseDateOrNull(
-        firstDefined(item, [
-            "checkOut", "check_out", "checkOutDate", "check_out_date",
-            "departure", "departureDate", "departure_date",
-            "endDate", "end_date", "to", "dateTo", "date_to"
-        ])
-    );
+    const guestName = extractLodgifyGuestName_(item);
+    const checkinDate = extractLodgifyCheckinDate_(item);
+    const checkoutDate = extractLodgifyCheckoutDate_(item);
 
     const amount = extractAmountFromPaths_(item, [
         "total", "grandTotal", "grand_total", "totalAmount", "total_amount",
