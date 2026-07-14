@@ -755,7 +755,7 @@ function updateLodgifyEditableBookingRow_(sheetName, rowNo, booking) {
         sheet: sheetName,
         row: rowNo,
         updated: updateResult,
-        paymentTriggered: !!paymentTriggerResult,
+        paymentTriggered: !!(paymentTriggerResult && !paymentTriggerResult.skipped),
         paymentTriggerResult: paymentTriggerResult
     };
 }
