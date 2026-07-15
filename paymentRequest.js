@@ -57,7 +57,9 @@ var ALLE_BUCHUNGEN_REQUEST_FULL_PAYMENT_COL_IDX_ = ALLE_BUCHUNGEN_HEADERS_.index
 var ALLE_BUCHUNGEN_FULL_PAYMENT_DAYS_COL_IDX_ = ALLE_BUCHUNGEN_HEADERS_.indexOf("FullPaymentDaysBeforeCheckin");
 var ALLE_BUCHUNGEN_FULL_PAYMENT_WEEKS_COL_IDX_ = ALLE_BUCHUNGEN_HEADERS_.indexOf("FullPaymentWeeksBeforeCheckin");
 
-// Gültige Indizes (≥ 0) der manuell pflegbaren Spalten
+// Gültige Indizes (≥ 0) der manuell pflegbaren Spalten.
+// ALLE_BUCHUNGEN_HEADERS_ wird nach der Initialisierung nicht verändert,
+// daher sind diese Indizes für die gesamte Script-Laufzeit stabil.
 var ALLE_BUCHUNGEN_MANUAL_COL_INDICES_ = [
     ALLE_BUCHUNGEN_IS_EXTERNAL_COL_IDX_,
     ALLE_BUCHUNGEN_PAYMENT_OPTION_COL_IDX_,
@@ -1052,7 +1054,7 @@ function upsertAlleBuchungenFromItems_(sheetName, items, rawItems) {
             preserveExistingAlleBuchungenCellValue_(newRowValues, existingRow, ALLE_BUCHUNGEN_CHECKOUT_COL_IDX_);
             newRowValues[ALLE_BUCHUNGEN_MARKER_COL_IDX_] = existingRow[ALLE_BUCHUNGEN_MARKER_COL_IDX_];
             ALLE_BUCHUNGEN_MANUAL_COL_INDICES_.forEach(function (colIdx) {
-                if (colIdx < existingRow.length) {
+                if (colIdx < existingRow.length && colIdx < newRowValues.length) {
                     newRowValues[colIdx] = existingRow[colIdx];
                 }
             });
