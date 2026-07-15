@@ -49,6 +49,24 @@ var ALLE_BUCHUNGEN_GUEST_NAME_COL_IDX_ = 1;
 var ALLE_BUCHUNGEN_CHECKIN_COL_IDX_ = 2;
 var ALLE_BUCHUNGEN_CHECKOUT_COL_IDX_ = 3;
 var ALLE_BUCHUNGEN_STATUS_COL_IDX_ = ALLE_BUCHUNGEN_HEADERS_.indexOf("Status");
+
+// Spalten, die manuell bearbeitet werden dürfen und beim Update nicht überschrieben werden sollen
+var ALLE_BUCHUNGEN_IS_EXTERNAL_COL_IDX_ = ALLE_BUCHUNGEN_HEADERS_.indexOf("IsExternal");
+var ALLE_BUCHUNGEN_PAYMENT_OPTION_COL_IDX_ = ALLE_BUCHUNGEN_HEADERS_.indexOf("PaymentOption");
+var ALLE_BUCHUNGEN_REQUEST_FULL_PAYMENT_COL_IDX_ = ALLE_BUCHUNGEN_HEADERS_.indexOf("RequestFullPayment");
+var ALLE_BUCHUNGEN_FULL_PAYMENT_DAYS_COL_IDX_ = ALLE_BUCHUNGEN_HEADERS_.indexOf("FullPaymentDaysBeforeCheckin");
+var ALLE_BUCHUNGEN_FULL_PAYMENT_WEEKS_COL_IDX_ = ALLE_BUCHUNGEN_HEADERS_.indexOf("FullPaymentWeeksBeforeCheckin");
+
+// Gültige Indizes (≥ 0) der manuell pflegbaren Spalten.
+// ALLE_BUCHUNGEN_HEADERS_ wird nach der Initialisierung nicht verändert,
+// daher sind diese Indizes für die gesamte Script-Laufzeit stabil.
+var ALLE_BUCHUNGEN_MANUAL_COL_INDICES_ = [
+    ALLE_BUCHUNGEN_IS_EXTERNAL_COL_IDX_,
+    ALLE_BUCHUNGEN_PAYMENT_OPTION_COL_IDX_,
+    ALLE_BUCHUNGEN_REQUEST_FULL_PAYMENT_COL_IDX_,
+    ALLE_BUCHUNGEN_FULL_PAYMENT_DAYS_COL_IDX_,
+    ALLE_BUCHUNGEN_FULL_PAYMENT_WEEKS_COL_IDX_
+].filter(function (idx) { return idx >= 0; });
 var DECLINED_OR_CANCELLED_STATUS_PATTERNS_ = [
     /\bcancel(?:ed|led)\b/,
     /\bdeclin(?:e|ed)\b/,
@@ -946,10 +964,13 @@ function mapLodgifyItemToAlleBuchungenRow_(item) {
  * Die Spalte "ZahlungsAufforderungAktiv" wird dabei NICHT überschrieben (manuelle Eingabe).
  *
  * @param {string} sheetName  Name des Ziel-Sheets
- * @param {Array}  items      Lodgify-Buchungsobjekte
+ * @param {Array}  items      Gefilterte Lodgify-Buchungsobjekte (nur bestätigte Buchungen).
+ * @param {Array}  [rawItems] Optionale vollständige Rohdaten aller Endpunkte. Items daraus,
+ *                             die nicht in AlleBuchungen aufgenommen werden (z.B. Owner-Sperren),
+ *                             werden zu excludedBookingIds hinzugefügt und damit aus dem Sheet gelöscht.
  * @returns {{ inserted: number, updated: number, removed: number }}
  */
-function upsertAlleBuchungenFromItems_(sheetName, items) {
+function upsertAlleBuchungenFromItems_(sheetName, items, rawItems) {
     const sourceItems = Array.isArray(items) ? items : [];
     const sheet = ensureAlleBuchungenSheet_(sheetName);
     const lastRow = sheet.getLastRow();
@@ -977,6 +998,17 @@ function upsertAlleBuchungenFromItems_(sheetName, items) {
 
         includedItems.push(item);
         if (bookingId) includedBookingIds[bookingId] = true;
+    });
+
+    // Rohdaten (alle Endpunkt-Ergebnisse) auswerten: gefilterte Einträge (z.B. Owner-Sperren)
+    // werden zu excludedBookingIds hinzugefügt, damit bestehende Sheet-Zeilen entfernt werden.
+    (Array.isArray(rawItems) ? rawItems : []).forEach(function (item) {
+        const bookingId = extractLodgifyBookingId_(item);
+        if (!bookingId) return;
+        if (includedBookingIds[bookingId]) return;
+        if (!shouldIncludeLodgifyItemInAlleBuchungen_(item)) {
+            excludedBookingIds[bookingId] = true;
+        }
     });
 
     const rowsToDelete = [];
@@ -1012,12 +1044,20 @@ function upsertAlleBuchungenFromItems_(sheetName, items) {
             const existingRow = existingData[dataIdx];
 
             // Neue Werte übernehmen, aber ZahlungsAufforderungAktiv und
-            // ZahlungsUpdateDurchgefuehrt aus dem bestehenden Eintrag beibehalten
+            // ZahlungsUpdateDurchgefuehrt aus dem bestehenden Eintrag beibehalten.
+            // Manuell gesetzte Zahlungskonfigurationsfelder werden ebenfalls nicht
+            // überschrieben, damit der Nutzer IsExternal, PaymentOption,
+            // RequestFullPayment und die Vorlauf-Tage/Wochen eigenständig pflegen kann.
             const newRowValues = mapped.row.slice();
             preserveExistingAlleBuchungenCellValue_(newRowValues, existingRow, ALLE_BUCHUNGEN_GUEST_NAME_COL_IDX_);
             preserveExistingAlleBuchungenCellValue_(newRowValues, existingRow, ALLE_BUCHUNGEN_CHECKIN_COL_IDX_);
             preserveExistingAlleBuchungenCellValue_(newRowValues, existingRow, ALLE_BUCHUNGEN_CHECKOUT_COL_IDX_);
             newRowValues[ALLE_BUCHUNGEN_MARKER_COL_IDX_] = existingRow[ALLE_BUCHUNGEN_MARKER_COL_IDX_];
+            ALLE_BUCHUNGEN_MANUAL_COL_INDICES_.forEach(function (colIdx) {
+                if (colIdx < existingRow.length && colIdx < newRowValues.length) {
+                    newRowValues[colIdx] = existingRow[colIdx];
+                }
+            });
             if (existingRow[ALLE_BUCHUNGEN_TIMESTAMP_COL_IDX_]) {
                 newRowValues[ALLE_BUCHUNGEN_TIMESTAMP_COL_IDX_] = existingRow[ALLE_BUCHUNGEN_TIMESTAMP_COL_IDX_];
             }
@@ -1155,7 +1195,7 @@ function processLodgifyPaymentRequestUpdates(params) {
     const config = getPaymentRequestConfig_();
     const queryParams = params || {};
 
-    const bookingsResult = fetchBookingsWithCloudFallback_(queryParams);
+    const bookingsResult = fetchBookingsWithCloudFallback_(Object.assign({}, queryParams, { includeCanceled: "true" }));
     const reservationsResult = fetchReservationsWithFallback_(queryParams);
 
     const combinedItems = bookingsResult.items.concat(reservationsResult.items);
@@ -1173,7 +1213,7 @@ function processLodgifyPaymentRequestUpdates(params) {
     }
 
     // AlleBuchungen-Sheet befüllen/aktualisieren
-    const upsertResult = upsertAlleBuchungenFromItems_(config.sheetName, allItems);
+    const upsertResult = upsertAlleBuchungenFromItems_(config.sheetName, allItems, combinedItems);
 
     // Items-by-ID-Map für schnellen Zugriff
     const itemsById = {};

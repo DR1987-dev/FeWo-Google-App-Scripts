@@ -189,7 +189,7 @@ function importLodgifyEinnahmenToImport(queryParams) {
     const params = queryParams || {};
     const excludeDeclinedCancelled = toBooleanWithDefault_(params.excludeDeclinedCancelled, true);
 
-    const bookingsResult = fetchBookingsWithCloudFallback_(params);
+    const bookingsResult = fetchBookingsWithCloudFallback_(Object.assign({}, params, { includeCanceled: "true" }));
     const reservationsResult = fetchReservationsWithFallback_(params);
 
     const combinedItems = bookingsResult.items.concat(reservationsResult.items);
@@ -317,7 +317,7 @@ function importLodgifyEinnahmenToImport(queryParams) {
     let paymentRequestResult = null;
     try {
         const prConfig = getPaymentRequestConfig_();
-        upsertAlleBuchungenFromItems_(prConfig.sheetName, allItems);
+        upsertAlleBuchungenFromItems_(prConfig.sheetName, allItems, combinedItems);
 
         const itemsById = {};
         allItems.forEach(item => {
@@ -448,7 +448,9 @@ function fetchBookingsWithCloudFallback_(queryParams) {
             baseParams[key] = value;
         }
     });
-    baseParams.includeCanceled = "false";
+    if (!Object.prototype.hasOwnProperty.call(baseParams, "includeCanceled")) {
+        baseParams.includeCanceled = "false";
+    }
     if (baseParams.includeCount === undefined) baseParams.includeCount = true;
     if (baseParams.stayFilter === undefined) baseParams.stayFilter = "All";
     if (baseParams.includeTransactions === undefined) baseParams.includeTransactions = false;
@@ -760,6 +762,11 @@ var LODGIFY_ITEM_COMPLETENESS_WEIGHTS_ = {
     paymentOption: 1
 };
 
+// Typwerte, die einen geschlossenen Zeitraum / Eigentümer-Sperre identifizieren.
+var LODGIFY_OWNER_BLOCK_TYPE_TOKENS_ = [
+    "owner", "unavailable", "block_off", "blocked", "closed_period", "maintenance"
+];
+
 function scoreLodgifyItemCompleteness_(item) {
     if (!item || typeof item !== "object") return 0;
 
@@ -1027,11 +1034,22 @@ function extractHttpStatusFromError_(msg) {
 function isConfirmedBooking_(item, excludeDeclinedCancelled) {
     if (!item || typeof item !== "object") return false;
 
+    // Geschlossene Zeiträume / Eigentümer-Sperren ausschließen (keine echten Buchungen).
+    const isOwner = toBooleanWithDefault_(
+        firstDefined(item, ["is_owner", "isOwner", "is_owner_block", "isOwnerBlock", "owner_block"]),
+        false
+    );
+    if (isOwner) return false;
+
     const type = String(firstDefined(item, ["type", "reservationType", "reservation_type"]) || "")
         .trim()
         .toLowerCase();
     if (type && type.indexOf("enquiry") !== -1) {
         return false;
+    }
+    // Geschlossene Zeiträume können auch über den Typ identifiziert werden.
+    for (let i = 0; i < LODGIFY_OWNER_BLOCK_TYPE_TOKENS_.length; i++) {
+        if (type && type.indexOf(LODGIFY_OWNER_BLOCK_TYPE_TOKENS_[i]) !== -1) return false;
     }
 
     const status = String(firstDefined(item, [
