@@ -317,7 +317,7 @@ function importLodgifyEinnahmenToImport(queryParams) {
     let paymentRequestResult = null;
     try {
         const prConfig = getPaymentRequestConfig_();
-        upsertAlleBuchungenFromItems_(prConfig.sheetName, allItems);
+        upsertAlleBuchungenFromItems_(prConfig.sheetName, allItems, combinedItems);
 
         const itemsById = {};
         allItems.forEach(item => {
@@ -1027,11 +1027,23 @@ function extractHttpStatusFromError_(msg) {
 function isConfirmedBooking_(item, excludeDeclinedCancelled) {
     if (!item || typeof item !== "object") return false;
 
+    // Geschlossene Zeiträume / Eigentümer-Sperren ausschließen (keine echten Buchungen).
+    const isOwner = toBooleanWithDefault_(
+        firstDefined(item, ["is_owner", "isOwner", "is_owner_block", "isOwnerBlock", "owner_block"]),
+        false
+    );
+    if (isOwner) return false;
+
     const type = String(firstDefined(item, ["type", "reservationType", "reservation_type"]) || "")
         .trim()
         .toLowerCase();
     if (type && type.indexOf("enquiry") !== -1) {
         return false;
+    }
+    // Geschlossene Zeiträume können auch über den Typ identifiziert werden.
+    const ownerTypeTokens = ["owner", "unavailable", "block_off", "blocked", "closed_period", "maintenance"];
+    for (let i = 0; i < ownerTypeTokens.length; i++) {
+        if (type && type.indexOf(ownerTypeTokens[i]) !== -1) return false;
     }
 
     const status = String(firstDefined(item, [

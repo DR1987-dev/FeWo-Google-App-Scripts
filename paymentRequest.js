@@ -949,7 +949,7 @@ function mapLodgifyItemToAlleBuchungenRow_(item) {
  * @param {Array}  items      Lodgify-Buchungsobjekte
  * @returns {{ inserted: number, updated: number, removed: number }}
  */
-function upsertAlleBuchungenFromItems_(sheetName, items) {
+function upsertAlleBuchungenFromItems_(sheetName, items, rawItems) {
     const sourceItems = Array.isArray(items) ? items : [];
     const sheet = ensureAlleBuchungenSheet_(sheetName);
     const lastRow = sheet.getLastRow();
@@ -977,6 +977,17 @@ function upsertAlleBuchungenFromItems_(sheetName, items) {
 
         includedItems.push(item);
         if (bookingId) includedBookingIds[bookingId] = true;
+    });
+
+    // Rohdaten (alle Endpunkt-Ergebnisse) auswerten: gefilterte Einträge (z.B. Owner-Sperren)
+    // werden zu excludedBookingIds hinzugefügt, damit bestehende Sheet-Zeilen entfernt werden.
+    (Array.isArray(rawItems) ? rawItems : []).forEach(function (item) {
+        const bookingId = extractLodgifyBookingId_(item);
+        if (!bookingId) return;
+        if (includedBookingIds[bookingId]) return;
+        if (!shouldIncludeLodgifyItemInAlleBuchungen_(item)) {
+            excludedBookingIds[bookingId] = true;
+        }
     });
 
     const rowsToDelete = [];
@@ -1173,7 +1184,7 @@ function processLodgifyPaymentRequestUpdates(params) {
     }
 
     // AlleBuchungen-Sheet befüllen/aktualisieren
-    const upsertResult = upsertAlleBuchungenFromItems_(config.sheetName, allItems);
+    const upsertResult = upsertAlleBuchungenFromItems_(config.sheetName, allItems, combinedItems);
 
     // Items-by-ID-Map für schnellen Zugriff
     const itemsById = {};
