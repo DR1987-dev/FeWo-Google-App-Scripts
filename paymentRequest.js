@@ -56,6 +56,15 @@ var ALLE_BUCHUNGEN_PAYMENT_OPTION_COL_IDX_ = ALLE_BUCHUNGEN_HEADERS_.indexOf("Pa
 var ALLE_BUCHUNGEN_REQUEST_FULL_PAYMENT_COL_IDX_ = ALLE_BUCHUNGEN_HEADERS_.indexOf("RequestFullPayment");
 var ALLE_BUCHUNGEN_FULL_PAYMENT_DAYS_COL_IDX_ = ALLE_BUCHUNGEN_HEADERS_.indexOf("FullPaymentDaysBeforeCheckin");
 var ALLE_BUCHUNGEN_FULL_PAYMENT_WEEKS_COL_IDX_ = ALLE_BUCHUNGEN_HEADERS_.indexOf("FullPaymentWeeksBeforeCheckin");
+
+// Gültige Indizes (≥ 0) der manuell pflegbaren Spalten – wird einmalig beim Laden berechnet
+var ALLE_BUCHUNGEN_MANUAL_COL_INDICES_ = [
+    ALLE_BUCHUNGEN_IS_EXTERNAL_COL_IDX_,
+    ALLE_BUCHUNGEN_PAYMENT_OPTION_COL_IDX_,
+    ALLE_BUCHUNGEN_REQUEST_FULL_PAYMENT_COL_IDX_,
+    ALLE_BUCHUNGEN_FULL_PAYMENT_DAYS_COL_IDX_,
+    ALLE_BUCHUNGEN_FULL_PAYMENT_WEEKS_COL_IDX_
+].filter(function (idx) { return idx >= 0; });
 var DECLINED_OR_CANCELLED_STATUS_PATTERNS_ = [
     /\bcancel(?:ed|led)\b/,
     /\bdeclin(?:e|ed)\b/,
@@ -1042,11 +1051,9 @@ function upsertAlleBuchungenFromItems_(sheetName, items, rawItems) {
             preserveExistingAlleBuchungenCellValue_(newRowValues, existingRow, ALLE_BUCHUNGEN_CHECKIN_COL_IDX_);
             preserveExistingAlleBuchungenCellValue_(newRowValues, existingRow, ALLE_BUCHUNGEN_CHECKOUT_COL_IDX_);
             newRowValues[ALLE_BUCHUNGEN_MARKER_COL_IDX_] = existingRow[ALLE_BUCHUNGEN_MARKER_COL_IDX_];
-            newRowValues[ALLE_BUCHUNGEN_IS_EXTERNAL_COL_IDX_] = existingRow[ALLE_BUCHUNGEN_IS_EXTERNAL_COL_IDX_];
-            newRowValues[ALLE_BUCHUNGEN_PAYMENT_OPTION_COL_IDX_] = existingRow[ALLE_BUCHUNGEN_PAYMENT_OPTION_COL_IDX_];
-            newRowValues[ALLE_BUCHUNGEN_REQUEST_FULL_PAYMENT_COL_IDX_] = existingRow[ALLE_BUCHUNGEN_REQUEST_FULL_PAYMENT_COL_IDX_];
-            newRowValues[ALLE_BUCHUNGEN_FULL_PAYMENT_DAYS_COL_IDX_] = existingRow[ALLE_BUCHUNGEN_FULL_PAYMENT_DAYS_COL_IDX_];
-            newRowValues[ALLE_BUCHUNGEN_FULL_PAYMENT_WEEKS_COL_IDX_] = existingRow[ALLE_BUCHUNGEN_FULL_PAYMENT_WEEKS_COL_IDX_];
+            ALLE_BUCHUNGEN_MANUAL_COL_INDICES_.forEach(function (colIdx) {
+                newRowValues[colIdx] = existingRow[colIdx];
+            });
             if (existingRow[ALLE_BUCHUNGEN_TIMESTAMP_COL_IDX_]) {
                 newRowValues[ALLE_BUCHUNGEN_TIMESTAMP_COL_IDX_] = existingRow[ALLE_BUCHUNGEN_TIMESTAMP_COL_IDX_];
             }
