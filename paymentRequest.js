@@ -49,6 +49,13 @@ var ALLE_BUCHUNGEN_GUEST_NAME_COL_IDX_ = 1;
 var ALLE_BUCHUNGEN_CHECKIN_COL_IDX_ = 2;
 var ALLE_BUCHUNGEN_CHECKOUT_COL_IDX_ = 3;
 var ALLE_BUCHUNGEN_STATUS_COL_IDX_ = ALLE_BUCHUNGEN_HEADERS_.indexOf("Status");
+
+// Spalten, die manuell bearbeitet werden dürfen und beim Update nicht überschrieben werden sollen
+var ALLE_BUCHUNGEN_IS_EXTERNAL_COL_IDX_ = ALLE_BUCHUNGEN_HEADERS_.indexOf("IsExternal");
+var ALLE_BUCHUNGEN_PAYMENT_OPTION_COL_IDX_ = ALLE_BUCHUNGEN_HEADERS_.indexOf("PaymentOption");
+var ALLE_BUCHUNGEN_REQUEST_FULL_PAYMENT_COL_IDX_ = ALLE_BUCHUNGEN_HEADERS_.indexOf("RequestFullPayment");
+var ALLE_BUCHUNGEN_FULL_PAYMENT_DAYS_COL_IDX_ = ALLE_BUCHUNGEN_HEADERS_.indexOf("FullPaymentDaysBeforeCheckin");
+var ALLE_BUCHUNGEN_FULL_PAYMENT_WEEKS_COL_IDX_ = ALLE_BUCHUNGEN_HEADERS_.indexOf("FullPaymentWeeksBeforeCheckin");
 var DECLINED_OR_CANCELLED_STATUS_PATTERNS_ = [
     /\bcancel(?:ed|led)\b/,
     /\bdeclin(?:e|ed)\b/,
@@ -1026,12 +1033,20 @@ function upsertAlleBuchungenFromItems_(sheetName, items, rawItems) {
             const existingRow = existingData[dataIdx];
 
             // Neue Werte übernehmen, aber ZahlungsAufforderungAktiv und
-            // ZahlungsUpdateDurchgefuehrt aus dem bestehenden Eintrag beibehalten
+            // ZahlungsUpdateDurchgefuehrt aus dem bestehenden Eintrag beibehalten.
+            // Manuell gesetzte Zahlungskonfigurationsfelder werden ebenfalls nicht
+            // überschrieben, damit der Nutzer IsExternal, PaymentOption,
+            // RequestFullPayment und die Vorlauf-Tage/Wochen eigenständig pflegen kann.
             const newRowValues = mapped.row.slice();
             preserveExistingAlleBuchungenCellValue_(newRowValues, existingRow, ALLE_BUCHUNGEN_GUEST_NAME_COL_IDX_);
             preserveExistingAlleBuchungenCellValue_(newRowValues, existingRow, ALLE_BUCHUNGEN_CHECKIN_COL_IDX_);
             preserveExistingAlleBuchungenCellValue_(newRowValues, existingRow, ALLE_BUCHUNGEN_CHECKOUT_COL_IDX_);
             newRowValues[ALLE_BUCHUNGEN_MARKER_COL_IDX_] = existingRow[ALLE_BUCHUNGEN_MARKER_COL_IDX_];
+            newRowValues[ALLE_BUCHUNGEN_IS_EXTERNAL_COL_IDX_] = existingRow[ALLE_BUCHUNGEN_IS_EXTERNAL_COL_IDX_];
+            newRowValues[ALLE_BUCHUNGEN_PAYMENT_OPTION_COL_IDX_] = existingRow[ALLE_BUCHUNGEN_PAYMENT_OPTION_COL_IDX_];
+            newRowValues[ALLE_BUCHUNGEN_REQUEST_FULL_PAYMENT_COL_IDX_] = existingRow[ALLE_BUCHUNGEN_REQUEST_FULL_PAYMENT_COL_IDX_];
+            newRowValues[ALLE_BUCHUNGEN_FULL_PAYMENT_DAYS_COL_IDX_] = existingRow[ALLE_BUCHUNGEN_FULL_PAYMENT_DAYS_COL_IDX_];
+            newRowValues[ALLE_BUCHUNGEN_FULL_PAYMENT_WEEKS_COL_IDX_] = existingRow[ALLE_BUCHUNGEN_FULL_PAYMENT_WEEKS_COL_IDX_];
             if (existingRow[ALLE_BUCHUNGEN_TIMESTAMP_COL_IDX_]) {
                 newRowValues[ALLE_BUCHUNGEN_TIMESTAMP_COL_IDX_] = existingRow[ALLE_BUCHUNGEN_TIMESTAMP_COL_IDX_];
             }
