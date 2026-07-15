@@ -1169,7 +1169,7 @@ function processLodgifyPaymentRequestUpdates(params) {
     const config = getPaymentRequestConfig_();
     const queryParams = params || {};
 
-    const bookingsResult = fetchBookingsWithCloudFallback_(queryParams);
+    const bookingsResult = fetchBookingsWithCloudFallback_(Object.assign({}, queryParams, { includeCanceled: "true" }));
     const reservationsResult = fetchReservationsWithFallback_(queryParams);
 
     const combinedItems = bookingsResult.items.concat(reservationsResult.items);

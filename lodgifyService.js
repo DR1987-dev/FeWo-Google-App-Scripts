@@ -189,7 +189,7 @@ function importLodgifyEinnahmenToImport(queryParams) {
     const params = queryParams || {};
     const excludeDeclinedCancelled = toBooleanWithDefault_(params.excludeDeclinedCancelled, true);
 
-    const bookingsResult = fetchBookingsWithCloudFallback_(params);
+    const bookingsResult = fetchBookingsWithCloudFallback_(Object.assign({}, params, { includeCanceled: "true" }));
     const reservationsResult = fetchReservationsWithFallback_(params);
 
     const combinedItems = bookingsResult.items.concat(reservationsResult.items);
@@ -448,7 +448,9 @@ function fetchBookingsWithCloudFallback_(queryParams) {
             baseParams[key] = value;
         }
     });
-    baseParams.includeCanceled = "false";
+    if (!Object.prototype.hasOwnProperty.call(baseParams, "includeCanceled")) {
+        baseParams.includeCanceled = "false";
+    }
     if (baseParams.includeCount === undefined) baseParams.includeCount = true;
     if (baseParams.stayFilter === undefined) baseParams.stayFilter = "All";
     if (baseParams.includeTransactions === undefined) baseParams.includeTransactions = false;
