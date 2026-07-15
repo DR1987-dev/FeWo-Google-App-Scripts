@@ -760,6 +760,11 @@ var LODGIFY_ITEM_COMPLETENESS_WEIGHTS_ = {
     paymentOption: 1
 };
 
+// Typwerte, die einen geschlossenen Zeitraum / Eigentümer-Sperre identifizieren.
+var LODGIFY_OWNER_BLOCK_TYPE_TOKENS_ = [
+    "owner", "unavailable", "block_off", "blocked", "closed_period", "maintenance"
+];
+
 function scoreLodgifyItemCompleteness_(item) {
     if (!item || typeof item !== "object") return 0;
 
@@ -1041,9 +1046,8 @@ function isConfirmedBooking_(item, excludeDeclinedCancelled) {
         return false;
     }
     // Geschlossene Zeiträume können auch über den Typ identifiziert werden.
-    const ownerTypeTokens = ["owner", "unavailable", "block_off", "blocked", "closed_period", "maintenance"];
-    for (let i = 0; i < ownerTypeTokens.length; i++) {
-        if (type && type.indexOf(ownerTypeTokens[i]) !== -1) return false;
+    for (let i = 0; i < LODGIFY_OWNER_BLOCK_TYPE_TOKENS_.length; i++) {
+        if (type && type.indexOf(LODGIFY_OWNER_BLOCK_TYPE_TOKENS_[i]) !== -1) return false;
     }
 
     const status = String(firstDefined(item, [

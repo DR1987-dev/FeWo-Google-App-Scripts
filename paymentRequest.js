@@ -946,7 +946,10 @@ function mapLodgifyItemToAlleBuchungenRow_(item) {
  * Die Spalte "ZahlungsAufforderungAktiv" wird dabei NICHT überschrieben (manuelle Eingabe).
  *
  * @param {string} sheetName  Name des Ziel-Sheets
- * @param {Array}  items      Lodgify-Buchungsobjekte
+ * @param {Array}  items      Gefilterte Lodgify-Buchungsobjekte (nur bestätigte Buchungen).
+ * @param {Array}  [rawItems] Optionale vollständige Rohdaten aller Endpunkte. Items daraus,
+ *                             die nicht in AlleBuchungen aufgenommen werden (z.B. Owner-Sperren),
+ *                             werden zu excludedBookingIds hinzugefügt und damit aus dem Sheet gelöscht.
  * @returns {{ inserted: number, updated: number, removed: number }}
  */
 function upsertAlleBuchungenFromItems_(sheetName, items, rawItems) {
