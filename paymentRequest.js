@@ -739,40 +739,56 @@ function buildLodgifyPaymentPatchPathCandidates_(bookingId) {
     return resolved;
 }
 
+function buildLodgifyPaymentMethodCandidates_() {
+    const props = PropertiesService.getScriptProperties();
+    const configured = String(props.getProperty("LODGIFY_PAYMENT_HTTP_METHOD") || "").trim().toLowerCase();
+    if (configured) {
+        return [configured];
+    }
+    // Try PATCH first (original behaviour), then PUT as fallback since Lodgify's
+    // API gateway rejects PATCH with "Failed to match Route configuration, verb: PATCH".
+    return ["patch", "put"];
+}
+
 function triggerLodgifyPaymentUpdate_(booking) {
     const bookingId = String(booking.lodgify_booking_id || booking.id || "").trim();
     if (!bookingId) {
         throw new Error("LodgifyBookingId fehlt für die angeforderte Zahlungsaktualisierung.");
     }
 
+    const methodCandidates = buildLodgifyPaymentMethodCandidates_();
     const pathCandidates = buildLodgifyPaymentPatchPathCandidates_(bookingId);
     const payloadCandidates = buildLodgifyPaymentPatchPayloadCandidates_(booking);
     const attempts = [];
     let lastError = null;
 
-    for (let i = 0; i < pathCandidates.length; i++) {
-        const path = pathCandidates[i];
-        for (let j = 0; j < payloadCandidates.length; j++) {
-            const payload = payloadCandidates[j];
-            try {
-                const response = lodgifyRequest(path, {
-                    method: "patch",
-                    payload: payload
-                });
-                return {
-                    ok: true,
-                    path: path,
-                    status: response.status,
-                    payload: payload,
-                    response: response.body
-                };
-            } catch (err) {
-                const msg = String(err && err.message ? err.message : err);
-                attempts.push(`PATCH ${path}: ${msg}`);
-                lastError = msg;
-                const status = extractHttpStatusFromErrorSafe_(msg);
-                if (status === 404 || status === 405) {
-                    continue;
+    for (let methodIndex = 0; methodIndex < methodCandidates.length; methodIndex++) {
+        const method = methodCandidates[methodIndex];
+        for (let i = 0; i < pathCandidates.length; i++) {
+            const path = pathCandidates[i];
+            for (let j = 0; j < payloadCandidates.length; j++) {
+                const payload = payloadCandidates[j];
+                try {
+                    const response = lodgifyRequest(path, {
+                        method: method,
+                        payload: payload
+                    });
+                    return {
+                        ok: true,
+                        path: path,
+                        method: method,
+                        status: response.status,
+                        payload: payload,
+                        response: response.body
+                    };
+                } catch (err) {
+                    const msg = String(err && err.message ? err.message : err);
+                    attempts.push(`${method.toUpperCase()} ${path}: ${msg}`);
+                    lastError = msg;
+                    const status = extractHttpStatusFromErrorSafe_(msg);
+                    if (status === 404 || status === 405) {
+                        continue;
+                    }
                 }
             }
         }
@@ -780,9 +796,9 @@ function triggerLodgifyPaymentUpdate_(booking) {
 
     const attemptPreview = attempts.slice(-4).join(" | ");
     const attemptedPaths = pathCandidates.join(", ");
-    Logger.log(`Lodgify payment patch paths tried (${bookingId}): ${attemptedPaths}`);
+    Logger.log(`Lodgify payment update paths tried (${bookingId}): ${methodCandidates.join("/")} ${attemptedPaths}`);
     const attemptedPathsPreview = attemptedPaths.length > 200 ? attemptedPaths.slice(0, 200) + "..." : attemptedPaths;
-    throw new Error(`Lodgify Payment-Update fehlgeschlagen (${bookingId}, Versuche=${attempts.length}, Pfade=${attemptedPathsPreview}): ${attemptPreview || lastError || "unbekannter Fehler"}`);
+    throw new Error(`Lodgify Payment-Update fehlgeschlagen (${bookingId}, Versuche=${attempts.length}, Methoden=${methodCandidates.join("/")}, Pfade=${attemptedPathsPreview}): ${attemptPreview || lastError || "unbekannter Fehler"}`);
 }
 
 function updateLodgifyEditableBookingRow_(sheetName, rowNo, booking) {
