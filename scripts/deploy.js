@@ -78,9 +78,11 @@ async function main() {
             scriptId,
             deploymentId: primary.deploymentId,
             requestBody: {
-                versionNumber,
-                manifestFileName: "appsscript",
-                description: deploymentName,
+                deploymentConfig: {
+                    versionNumber,
+                    manifestFileName: "appsscript",
+                    description: deploymentName,
+                },
             },
         });
         console.log(`Updated deployment ${primary.deploymentId} -> version ${versionNumber}`);
@@ -107,9 +109,11 @@ async function main() {
         const created = await script.projects.deployments.create({
             scriptId,
             requestBody: {
-                versionNumber,
-                manifestFileName: "appsscript",
-                description: deploymentName,
+                deploymentConfig: {
+                    versionNumber,
+                    manifestFileName: "appsscript",
+                    description: deploymentName,
+                },
             },
         });
         console.log(`Created deployment ${created.data.deploymentId} -> version ${versionNumber}`);
