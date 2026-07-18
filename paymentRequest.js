@@ -715,6 +715,10 @@ function buildLodgifyPaymentPatchPathCandidates_(bookingId) {
         props.getProperty("LODGIFY_PAYMENT_PATCH_PATH_TEMPLATE") ||
         ""
     ).trim();
+    // Prefer the documented request-payment endpoint first. We keep both
+    // placeholder styles ({reservationId}/{id}) and both v1 URL shapes
+    // (/reservation/... and /reservation/booking/...) because existing tenant
+    // configs and older experiments in this script have used both variants.
     const rawCandidates = [
         configured,
         "/v1/reservation/{reservationId}/request-payment",
@@ -758,7 +762,8 @@ function buildLodgifyPaymentMethodCandidates_() {
         return [configured];
     }
     // Lodgify documents the payment-request endpoint as a PUT call; keep the
-    // default aligned with that contract unless a script property overrides it.
+    // default aligned with that contract unless a script property overrides it
+    // for a tenant-specific legacy setup.
     return ["put"];
 }
 
