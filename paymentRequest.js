@@ -710,9 +710,21 @@ function buildLodgifyPaymentPatchPayloadCandidates_(booking) {
 
 function buildLodgifyPaymentPatchPathCandidates_(bookingId) {
     const props = PropertiesService.getScriptProperties();
-    const configured = String(props.getProperty("LODGIFY_PAYMENT_PATCH_PATH_TEMPLATE") || "").trim();
+    const configured = String(
+        props.getProperty("LODGIFY_PAYMENT_REQUEST_PATH_TEMPLATE") ||
+        props.getProperty("LODGIFY_PAYMENT_PATCH_PATH_TEMPLATE") ||
+        ""
+    ).trim();
+    // Prefer the documented request-payment endpoint first. We keep both
+    // placeholder styles ({reservationId}/{id}) and both v1 URL shapes
+    // (/reservation/... and /reservation/booking/...) because existing tenant
+    // configs and older experiments in this script have used both variants.
     const rawCandidates = [
         configured,
+        "/v1/reservation/{reservationId}/request-payment",
+        "/v1/reservation/{id}/request-payment",
+        "/v1/reservation/booking/{reservationId}/request-payment",
+        "/v1/reservation/booking/{id}/request-payment",
         "/api/reservations/{reservationId}",
         "/api/reservations/{id}",
         "/v2/reservations/{reservationId}",
@@ -741,13 +753,18 @@ function buildLodgifyPaymentPatchPathCandidates_(bookingId) {
 
 function buildLodgifyPaymentMethodCandidates_() {
     const props = PropertiesService.getScriptProperties();
-    const configured = String(props.getProperty("LODGIFY_PAYMENT_HTTP_METHOD") || "").trim().toLowerCase();
+    const configured = String(
+        props.getProperty("LODGIFY_PAYMENT_REQUEST_HTTP_METHOD") ||
+        props.getProperty("LODGIFY_PAYMENT_HTTP_METHOD") ||
+        ""
+    ).trim().toLowerCase();
     if (configured) {
         return [configured];
     }
-    // Try PATCH first (original behaviour), then PUT as fallback since Lodgify's
-    // API gateway rejects PATCH with "Failed to match Route configuration, verb: PATCH".
-    return ["patch", "put"];
+    // Lodgify documents the payment-request endpoint as a PUT call; keep the
+    // default aligned with that contract unless a script property overrides it
+    // for a tenant-specific legacy setup.
+    return ["put"];
 }
 
 function triggerLodgifyPaymentUpdate_(booking) {
