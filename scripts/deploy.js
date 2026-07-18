@@ -51,21 +51,59 @@ async function main() {
 
     const deploymentName = "CI Deployment";
     const deploymentsRes = await script.projects.deployments.list({ scriptId });
-    const deployments = deploymentsRes.data.deployments || [];
-    const existing = deployments.find((d) => d.description === deploymentName);
+    const allDeployments = deploymentsRes.data.deployments || [];
 
-    if (existing?.deploymentId) {
+    // @HEAD is the special "latest code" development deployment that Google creates automatically.
+    // It is not a versioned deployment and does not count against the 20-deployment limit.
+    const versionedDeployments = allDeployments.filter((d) => d.deploymentId !== "@HEAD");
+
+    // Due to a previous bug (d.description vs d.deploymentConfig.description), multiple
+    // "CI Deployment" entries may have accumulated. Find them all and clean up duplicates.
+    const ciDeployments = versionedDeployments.filter(
+        (d) => d.deploymentConfig?.description === deploymentName
+    );
+
+    if (ciDeployments.length > 0) {
+        // Keep the first entry as the canonical deployment; delete any extras
+        const [primary, ...extras] = ciDeployments;
+        for (const extra of extras) {
+            await script.projects.deployments.delete({
+                scriptId,
+                deploymentId: extra.deploymentId,
+            });
+            console.log(`Deleted duplicate CI deployment ${extra.deploymentId}`);
+        }
+
         await script.projects.deployments.update({
             scriptId,
-            deploymentId: existing.deploymentId,
+            deploymentId: primary.deploymentId,
             requestBody: {
                 versionNumber,
                 manifestFileName: "appsscript",
                 description: deploymentName,
             },
         });
-        console.log(`Updated deployment ${existing.deploymentId} -> version ${versionNumber}`);
+        console.log(`Updated deployment ${primary.deploymentId} -> version ${versionNumber}`);
     } else {
+        // No CI deployment exists yet. If we're at the 20-deployment limit, remove the oldest
+        // versioned deployments (sorted by updateTime ascending) to make room for the new one.
+        const DEPLOYMENT_LIMIT = 20;
+        if (versionedDeployments.length >= DEPLOYMENT_LIMIT) {
+            const slotsNeeded = versionedDeployments.length - DEPLOYMENT_LIMIT + 1;
+            // Sort oldest-first so we reliably delete the least-recently-updated deployments
+            const sortedOldestFirst = [...versionedDeployments].sort(
+                (a, b) => new Date(a.updateTime) - new Date(b.updateTime)
+            );
+            const toDelete = sortedOldestFirst.slice(0, slotsNeeded);
+            for (const dep of toDelete) {
+                await script.projects.deployments.delete({
+                    scriptId,
+                    deploymentId: dep.deploymentId,
+                });
+                console.log(`Deleted old deployment ${dep.deploymentId} to stay within limit`);
+            }
+        }
+
         const created = await script.projects.deployments.create({
             scriptId,
             requestBody: {
