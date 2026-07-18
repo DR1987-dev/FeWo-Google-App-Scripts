@@ -757,6 +757,8 @@ function buildLodgifyPaymentMethodCandidates_() {
     if (configured) {
         return [configured];
     }
+    // Lodgify documents the payment-request endpoint as a PUT call; keep the
+    // default aligned with that contract unless a script property overrides it.
     return ["put"];
 }
 
