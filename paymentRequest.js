@@ -1116,6 +1116,11 @@ function applyPaymentRequestUpdates_(sheetName, itemsById, config) {
 
     const bookingIdColIdx = headers.indexOf("LodgifyBookingId");
     const timestampColIdx = headers.indexOf("ZahlungsUpdateDurchgefuehrt");
+    const isExternalColIdx = headers.indexOf("IsExternal");
+    const requestFullPaymentColIdx = headers.indexOf("RequestFullPayment");
+    const fullPaymentDaysColIdx = headers.indexOf("FullPaymentDaysBeforeCheckin");
+    const fullPaymentWeeksColIdx = headers.indexOf("FullPaymentWeeksBeforeCheckin");
+    const paymentOptionColIdx = headers.indexOf("PaymentOption");
 
     if (bookingIdColIdx === -1) {
         Logger.log(
@@ -1144,8 +1149,27 @@ function applyPaymentRequestUpdates_(sheetName, itemsById, config) {
             continue;
         }
 
+        // Manuell im Sheet gesetzte Felder (IsExternal, RequestFullPayment, Vorlaufzeit, PaymentOption)
+        // überschreiben die Lodgify-API-Werte, da der Nutzer diese Spalten bewusst pflegt.
+        const enrichedBooking = Object.assign({}, booking);
+        if (isExternalColIdx !== -1 && isValuePresent_(row[isExternalColIdx])) {
+            enrichedBooking.is_external = toBoolean(row[isExternalColIdx]);
+        }
+        if (requestFullPaymentColIdx !== -1 && isValuePresent_(row[requestFullPaymentColIdx])) {
+            enrichedBooking.request_full_payment = toBoolean(row[requestFullPaymentColIdx]);
+        }
+        if (fullPaymentDaysColIdx !== -1 && isValuePresent_(row[fullPaymentDaysColIdx])) {
+            enrichedBooking.full_payment_days_before_checkin = String(row[fullPaymentDaysColIdx]).trim();
+        }
+        if (fullPaymentWeeksColIdx !== -1 && isValuePresent_(row[fullPaymentWeeksColIdx])) {
+            enrichedBooking.full_payment_weeks_before_checkin = String(row[fullPaymentWeeksColIdx]).trim();
+        }
+        if (paymentOptionColIdx !== -1 && isValuePresent_(row[paymentOptionColIdx])) {
+            enrichedBooking.payment_option = String(row[paymentOptionColIdx]).trim();
+        }
+
         const paymentUpdateCompleted = timestampColIdx === -1 ? "" : row[timestampColIdx];
-        const evaluation = evaluateAutomaticPaymentRequest_(booking, paymentUpdateCompleted, config);
+        const evaluation = evaluateAutomaticPaymentRequest_(enrichedBooking, paymentUpdateCompleted, config);
         if (!evaluation.shouldRequest) {
             if (evaluation.reason === "alreadyRequested") {
                 skippedAlreadyRequested++;
@@ -1158,7 +1182,7 @@ function applyPaymentRequestUpdates_(sheetName, itemsById, config) {
         }
 
         const sheetRow = i + 1; // 1-basiert
-        const paymentTriggerResult = triggerLodgifyPaymentUpdate_(booking);
+        const paymentTriggerResult = triggerLodgifyPaymentUpdate_(enrichedBooking);
         if (!paymentTriggerResult || paymentTriggerResult.ok !== true) {
             const status = paymentTriggerResult && paymentTriggerResult.status ? `status=${paymentTriggerResult.status}` : "status=unbekannt";
             const path = paymentTriggerResult && paymentTriggerResult.path ? `path=${paymentTriggerResult.path}` : "path=unbekannt";
