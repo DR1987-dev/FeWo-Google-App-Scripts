@@ -762,8 +762,8 @@ function triggerLodgifyPaymentUpdate_(booking) {
     const attempts = [];
     let lastError = null;
 
-    for (let m = 0; m < methodCandidates.length; m++) {
-        const method = methodCandidates[m];
+    for (let methodIndex = 0; methodIndex < methodCandidates.length; methodIndex++) {
+        const method = methodCandidates[methodIndex];
         for (let i = 0; i < pathCandidates.length; i++) {
             const path = pathCandidates[i];
             for (let j = 0; j < payloadCandidates.length; j++) {
