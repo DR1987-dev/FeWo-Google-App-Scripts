@@ -685,9 +685,9 @@ function shouldTriggerLodgifyPaymentUpdate_(booking) {
  */
 function createLodgifyPaymentLink_(bookingId, amount) {
     const config = validateLodgifyConfig();
-    if (!(Number(amount) > 0)) {
+    if (Number(amount) <= 0) {
         throw new Error(
-            "Lodgify Zahlungslink-Erstellung abgebrochen: amount muss positiv sein " +
+            "Lodgify Zahlungslink-Erstellung abgebrochen: Betrag muss positiv sein " +
             "(erhalten: " + amount + ") für Buchung " + bookingId + "."
         );
     }
