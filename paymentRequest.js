@@ -685,6 +685,12 @@ function shouldTriggerLodgifyPaymentUpdate_(booking) {
  */
 function createLodgifyPaymentLink_(bookingId, amount) {
     const config = validateLodgifyConfig();
+    if (!(Number(amount) > 0)) {
+        throw new Error(
+            "Lodgify Zahlungslink-Erstellung abgebrochen: amount muss positiv sein " +
+            "(erhalten: " + amount + ") für Buchung " + bookingId + "."
+        );
+    }
     const path = "/v2/reservations/bookings/" + encodeURIComponent(bookingId) + "/quote/paymentLink";
     const url = lodgifyBuildUrl(path, null);
     const payload = JSON.stringify({ amount: Number(amount) });
@@ -894,6 +900,13 @@ function triggerLodgifyPaymentUpdate_(booking) {
         rawAmount = booking.betrag || 0;
     }
     const amount = toNumberOrZero_(rawAmount);
+    if (amount <= 0) {
+        throw new Error(
+            "Zahlungslink kann nicht erstellt werden: Betrag muss größer als 0 sein " +
+            "(Buchung " + bookingId + ", ermittelter Betrag: " + amount + "). " +
+            "Bitte stellen Sie sicher, dass der Betrag (Betrag/GrossAmount) in der Tabelle eingetragen ist."
+        );
+    }
 
     const linkResult = createLodgifyPaymentLink_(bookingId, amount);
     if (!linkResult || linkResult.ok !== true) {
