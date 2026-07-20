@@ -737,18 +737,76 @@ function createLodgifyPaymentLink_(bookingId, amount) {
 
 /**
  * Baut die Nachricht an den Gast mit dem Zahlungslink.
- * Der Text kann über die Script Property PAYMENT_REQUEST_MESSAGE_TEMPLATE angepasst werden.
- * Platzhalter: {paymentLink} oder {paymentUrl}
+ *
+ * Spracherkennung: Enthält die Zahlungs-URL das Segment /de/ wird die deutsche
+ * Vorlage verwendet, andernfalls die englische (für alle übrigen Sprachen).
+ *
+ * Verfügbare Platzhalter für PAYMENT_REQUEST_MESSAGE_TEMPLATE:
+ *   {paymentLink} / {paymentUrl} – Zahlungslink
+ *   {firstName} / {guestFirstName} – Vorname des Gastes
+ *   {amount}    – Betrag (kommaformatiert auf Deutsch, punktformatiert sonst)
+ *   {bookingId} – Lodgify-Buchungsnummer
  */
 function buildPaymentRequestMessage_(paymentUrl, booking) {
     const props = PropertiesService.getScriptProperties();
-    const template = String(
-        props.getProperty("PAYMENT_REQUEST_MESSAGE_TEMPLATE") ||
-        "Hallo, bitte bezahlen Sie Ihre Buchung über folgenden Link: {paymentLink}"
-    ).trim();
-    return template
-        .replace(/\{paymentLink\}/g, paymentUrl || "")
-        .replace(/\{paymentUrl\}/g, paymentUrl || "");
+    const customTemplate = String(props.getProperty("PAYMENT_REQUEST_MESSAGE_TEMPLATE") || "").trim();
+
+    const bookingId = String(booking && (booking.lodgify_booking_id || booking.id) || "").trim();
+    const guestName = String(booking && booking.guest_name || "").trim();
+    const firstName = guestName ? guestName.split(/\s+/)[0] : "";
+    const amount = booking && booking.gross_amount !== undefined ? booking.gross_amount : 0;
+
+    // Detect language from the payment URL locale segment (/de/ → German, everything else → English)
+    const isGerman = /\/de\//i.test(paymentUrl || "");
+
+    const amountFormatted = isGerman
+        ? Number(amount).toFixed(2).replace(".", ",")
+        : Number(amount).toFixed(2);
+
+    if (customTemplate) {
+        return customTemplate
+            .replace(/\{paymentLink\}/g, paymentUrl || "")
+            .replace(/\{paymentUrl\}/g, paymentUrl || "")
+            .replace(/\{firstName\}/g, firstName)
+            .replace(/\{guestFirstName\}/g, firstName)
+            .replace(/\{amount\}/g, amountFormatted)
+            .replace(/\{bookingId\}/g, bookingId);
+    }
+
+    if (isGerman) {
+        return "Hallo " + firstName + ",\n" +
+            "Bitte bezahlen Sie EUR" + amountFormatted + " für Ihre Buchung #" + bookingId + " für David´s Apartment.\n" +
+            "Bitte folgen Sie den Zahlungsanweisungen:\n" +
+            "Sie können den Betrag von EUR " + amountFormatted + "  mit allen gängigen Zahlungsmitteln bezahlen.\n" +
+            "Sollte der oben stehende Link nicht funktionieren, können Sie diese Adresse kopieren und in Ihren Browser einfügen:  " + (paymentUrl || "") + " \n" +
+            "Sie können per Banküberweisung zahlen an: IBAN: DE90120300001074313477" +
+            "SWIFT: Name der Bank: Deutsche KreditbankName des Empfängers: David's Apartment" +
+            "Zahlungsreferenz: Bitte Check-In Datum eintragen Betrag: EUR " + amountFormatted + "\n\n" +
+            "Falls Sie weitere Fragen haben, können Sie uns telefonisch (+4975429797272) oder per Antwort auf diese Email erreichen. \n\n" +
+            "Mit freundlichen Grüßen, \n" +
+            "David Rybosch - David´s Apartment\n" +
+            "Telefon: +4975429797272\n" +
+            "www.davids-apartment.de";
+    }
+
+    return "Hello " + firstName + ",\n" +
+        "Could you please proceed to pay EUR" + amountFormatted + " related to your booking #" + bookingId + " for David´s Apartment.\n" +
+        "Please follow the payment instructions:\n" +
+        "You can pay with any common payment methode the amount of EUR " + amountFormatted + ".\n" +
+        "If the above link does not work, please copy and paste this address into your browser: \n" +
+        (paymentUrl || "") + "\n" +
+        "You can pay by bank transfer to:\n" +
+        "IBAN: DE90120300001074313477\n" +
+        "SWIFT: \n" +
+        "Bank Name: Deutsche Kreditbank\n" +
+        "Recipient Name: David's Apartment\n" +
+        "Transfer Reference: Bitte Check-In Datum eintragen\n" +
+        "Amount to Pay: EUR " + amountFormatted + "\n\n" +
+        "In case you have any further questions, please contact us via phone (+4975429797272) or reply to this email.\n\n" +
+        "Best regards, \n" +
+        "David Rybosch - David´s Apartment\n" +
+        "Telephone: +4975429797272\n" +
+        "www.davids-apartment.de";
 }
 
 /**
