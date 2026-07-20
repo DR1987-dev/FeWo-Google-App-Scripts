@@ -451,6 +451,21 @@ function computeLodgifyNetAmount_(grossAmount, feesTotal) {
     return Number((gross - fees).toFixed(2));
 }
 
+/**
+ * Resolves the effective booking amount for payment requests.
+ * Uses gross_amount if > 0; otherwise falls back to payout_amount, net_amount, amount, betrag.
+ */
+function resolveBookingPaymentAmount_(booking) {
+    if (!booking) return 0;
+    var gross = toNumberOrZero_(booking.gross_amount);
+    if (gross > 0) return gross;
+    var payout = toNumberOrZero_(booking.payout_amount);
+    if (payout > 0) return payout;
+    var net = toNumberOrZero_(booking.net_amount);
+    if (net > 0) return net;
+    return toNumberOrZero_(booking.amount || booking.betrag || 0);
+}
+
 function extractHttpStatusFromErrorSafe_(msg) {
     if (typeof extractHttpStatusFromError_ === "function") {
         return extractHttpStatusFromError_(msg);
@@ -760,7 +775,7 @@ function buildPaymentRequestMessage_(paymentUrl, booking) {
     const bookingId = String(booking && (booking.lodgify_booking_id || booking.id) || "").trim();
     const guestName = String(booking && booking.guest_name || "").trim();
     const firstName = guestName ? guestName.split(/\s+/)[0] : "";
-    const amount = booking && booking.gross_amount !== undefined ? booking.gross_amount : 0;
+    const amount = resolveBookingPaymentAmount_(booking);
 
     // Detect language from the payment URL locale segment (/de/ → German, everything else → English)
     const isGerman = /\/de\//i.test(paymentUrl || "");
@@ -889,17 +904,9 @@ function triggerLodgifyPaymentUpdate_(booking) {
     }
 
     // Prefer the booking total (gross_amount from the "Betrag" column).
-    // Fall back to the "amount" field (used in some API response shapes),
-    // and finally to the German alias "betrag".
-    let rawAmount;
-    if (booking.gross_amount !== undefined) {
-        rawAmount = booking.gross_amount;
-    } else if (booking.amount !== undefined) {
-        rawAmount = booking.amount;
-    } else {
-        rawAmount = booking.betrag || 0;
-    }
-    const amount = toNumberOrZero_(rawAmount);
+    // If gross_amount is zero or missing, fall back to payout_amount ("PayoutAmount" column),
+    // then net_amount, then the generic "amount" field, and finally the German alias "betrag".
+    const amount = resolveBookingPaymentAmount_(booking);
     if (amount <= 0) {
         throw new Error(
             "Zahlungslink kann nicht erstellt werden: Betrag muss größer als 0 sein " +
