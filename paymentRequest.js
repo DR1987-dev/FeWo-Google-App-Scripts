@@ -678,144 +678,164 @@ function shouldTriggerLodgifyPaymentUpdate_(booking) {
     return trigger !== undefined ? toBoolean(trigger) : false;
 }
 
-function buildLodgifyPaymentPatchPayloadCandidates_(booking) {
-    const paymentOption = String(booking.payment_option || "").trim();
-    const requestFullPayment = toBoolean(booking.request_full_payment);
-    const fullPaymentDays = String(booking.full_payment_days_before_checkin || "").trim();
-    const fullPaymentWeeks = String(booking.full_payment_weeks_before_checkin || "").trim();
+/**
+ * Erstellt einen Zahlungslink für eine Buchung über die Lodgify API.
+ * Endpunkt: POST /v2/reservations/bookings/{id}/quote/paymentLink
+ * Der Betrag wird in der Anfrage mitgesendet.
+ */
+function createLodgifyPaymentLink_(bookingId, amount) {
+    const config = validateLodgifyConfig();
+    const path = "/v2/reservations/bookings/" + encodeURIComponent(bookingId) + "/quote/paymentLink";
+    const url = lodgifyBuildUrl(path, null);
+    const payload = JSON.stringify({ amount: Number(amount) });
 
-    const snakePayload = { payment_option: {} };
-    const camelPayload = { paymentOption: {} };
+    const fetchOptions = {
+        method: "post",
+        muteHttpExceptions: true,
+        contentType: "application/json-patch+json",
+        headers: {
+            "X-ApiKey": config.apiKey,
+            Accept: "text/plain"
+        },
+        payload: payload
+    };
 
-    if (paymentOption) {
-        snakePayload.payment_option.payment_option = paymentOption;
-        camelPayload.paymentOption.paymentOption = paymentOption;
+    const response = UrlFetchApp.fetch(url, fetchOptions);
+
+    Logger.log("===== CREATE PAYMENT LINK =====");
+    Logger.log("URL: " + url);
+    Logger.log("Payload: " + payload);
+    Logger.log("Status: " + response.getResponseCode());
+    Logger.log("Body: " + response.getContentText());
+
+    const status = response.getResponseCode();
+    const bodyText = response.getContentText() || "";
+
+    if (status < 200 || status >= 300) {
+        throw new Error(
+            "Lodgify Zahlungslink-Erstellung fehlgeschlagen (" + status + ") für Buchung " + bookingId + ": " + bodyText
+        );
     }
 
-    snakePayload.payment_option.request_full_payment = requestFullPayment;
-    camelPayload.paymentOption.requestFullPayment = requestFullPayment;
-
-    if (fullPaymentDays !== "") {
-        snakePayload.payment_option.full_payment_days_before_checkin = Number(fullPaymentDays);
-        camelPayload.paymentOption.fullPaymentDaysBeforeCheckin = Number(fullPaymentDays);
+    // Die Antwort ist entweder eine plain-text URL oder ein JSON-Objekt mit dem Link.
+    let paymentUrl;
+    try {
+        const parsed = JSON.parse(bodyText);
+        paymentUrl = parsed.url || parsed.link || parsed.payment_link || parsed.paymentLink
+            || parsed.payment_url || parsed.paymentUrl || String(bodyText).trim();
+    } catch (e) {
+        paymentUrl = String(bodyText).trim();
     }
 
-    if (fullPaymentWeeks !== "") {
-        snakePayload.payment_option.full_payment_weeks_before_checkin = Number(fullPaymentWeeks);
-        camelPayload.paymentOption.fullPaymentWeeksBeforeCheckin = Number(fullPaymentWeeks);
-    }
-
-    return [snakePayload, camelPayload];
+    return { ok: true, status: status, paymentUrl: paymentUrl };
 }
 
-function buildLodgifyPaymentPatchPathCandidates_(bookingId) {
+/**
+ * Baut die Nachricht an den Gast mit dem Zahlungslink.
+ * Der Text kann über die Script Property PAYMENT_REQUEST_MESSAGE_TEMPLATE angepasst werden.
+ * Platzhalter: {paymentLink} oder {paymentUrl}
+ */
+function buildPaymentRequestMessage_(paymentUrl, booking) {
     const props = PropertiesService.getScriptProperties();
-    const configured = String(
-        props.getProperty("LODGIFY_PAYMENT_REQUEST_PATH_TEMPLATE") ||
-        props.getProperty("LODGIFY_PAYMENT_PATCH_PATH_TEMPLATE") ||
-        ""
+    const template = String(
+        props.getProperty("PAYMENT_REQUEST_MESSAGE_TEMPLATE") ||
+        "Hallo, bitte bezahlen Sie Ihre Buchung über folgenden Link: {paymentLink}"
     ).trim();
-    // Prefer the documented request-payment endpoint first. We keep both
-    // placeholder styles ({reservationId}/{id}) and both v1 URL shapes
-    // (/reservation/... and /reservation/booking/...) because existing tenant
-    // configs and older experiments in this script have used both variants.
-    const rawCandidates = [
-        configured,
-        "/v1/reservation/{reservationId}/request-payment",
-        "/v1/reservation/{id}/request-payment",
-        "/v1/reservation/booking/{reservationId}/request-payment",
-        "/v1/reservation/booking/{id}/request-payment",
-        "/api/reservations/{reservationId}",
-        "/api/reservations/{id}",
-        "/v2/reservations/{reservationId}",
-        "/v2/reservations/{id}",
-        "/v2/reservations/bookings/{reservationId}",
-        "/v2/reservations/bookings/{id}",
-        "/v1/reservation/booking/{reservationId}",
-        "/v1/reservation/booking/{id}"
+    return template
+        .replace(/\{paymentLink\}/g, paymentUrl || "")
+        .replace(/\{paymentUrl\}/g, paymentUrl || "");
+}
+
+/**
+ * Sendet eine Nachricht an den Gast über die Lodgify Messaging API.
+ * Versucht mehrere Endpunkt-Kandidaten; der Pfad kann über
+ * LODGIFY_GUEST_MESSAGE_PATH (Script Property) überschrieben werden.
+ */
+function sendLodgifyBookingMessage_(bookingId, messageText) {
+    const props = PropertiesService.getScriptProperties();
+    const customPath = String(props.getProperty("LODGIFY_GUEST_MESSAGE_PATH") || "").trim();
+    const encodedId = encodeURIComponent(bookingId);
+
+    const pathCandidates = customPath
+        ? [customPath.replace(/\{id\}/g, encodedId).replace(/\{bookingId\}/g, encodedId)]
+        : [
+            "/v2/reservations/bookings/" + encodedId + "/messages",
+            "/v2/conversations/bookings/" + encodedId + "/messages",
+            "/v2/inbox/bookings/" + encodedId + "/messages"
+        ];
+
+    const payloadCandidates = [
+        { message: messageText },
+        { body: messageText },
+        { content: messageText, type: "message" }
     ];
 
-    const resolved = [];
-    rawCandidates.forEach(function (template) {
-        if (!template) return;
-        const path = String(template)
-            .replace(/\{reservationId\}/g, encodeURIComponent(bookingId))
-            .replace(/\{id\}/g, encodeURIComponent(bookingId))
-            .replace(/:reservationId/g, encodeURIComponent(bookingId))
-            .replace(/:id/g, encodeURIComponent(bookingId));
-        if (resolved.indexOf(path) === -1) {
-            resolved.push(path);
+    const attempts = [];
+    for (let p = 0; p < pathCandidates.length; p++) {
+        for (let q = 0; q < payloadCandidates.length; q++) {
+            try {
+                const response = lodgifyRequest(pathCandidates[p], {
+                    method: "post",
+                    payload: payloadCandidates[q]
+                });
+                return { ok: true, status: response.status, path: pathCandidates[p] };
+            } catch (err) {
+                const msg = String(err && err.message ? err.message : err);
+                attempts.push(pathCandidates[p] + ": " + msg);
+                const httpStatus = extractHttpStatusFromErrorSafe_(msg);
+                if (httpStatus === 404 || httpStatus === 405) continue;
+            }
         }
-    });
-
-    return resolved;
-}
-
-function buildLodgifyPaymentMethodCandidates_() {
-    const props = PropertiesService.getScriptProperties();
-    const configured = String(
-        props.getProperty("LODGIFY_PAYMENT_REQUEST_HTTP_METHOD") ||
-        props.getProperty("LODGIFY_PAYMENT_HTTP_METHOD") ||
-        ""
-    ).trim().toLowerCase();
-    if (configured) {
-        return [configured];
     }
-    // Lodgify documents the payment-request endpoint as a PUT call; keep the
-    // default aligned with that contract unless a script property overrides it
-    // for a tenant-specific legacy setup.
-    return ["put"];
+
+    const preview = attempts.slice(-3).join(" | ");
+    Logger.log("⚠️ Gastnachricht konnte nicht gesendet werden für Buchung " + bookingId + ": " + preview);
+    return { ok: false, error: preview };
 }
 
+/**
+ * Löst die Zahlungsanforderung für eine Buchung aus:
+ * 1. Erstellt einen Zahlungslink über POST /v2/reservations/bookings/{id}/quote/paymentLink
+ * 2. Sendet den Link als Nachricht an den Gast über die Lodgify Messaging API
+ */
 function triggerLodgifyPaymentUpdate_(booking) {
     const bookingId = String(booking.lodgify_booking_id || booking.id || "").trim();
     if (!bookingId) {
         throw new Error("LodgifyBookingId fehlt für die angeforderte Zahlungsaktualisierung.");
     }
 
-    const methodCandidates = buildLodgifyPaymentMethodCandidates_();
-    const pathCandidates = buildLodgifyPaymentPatchPathCandidates_(bookingId);
-    const payloadCandidates = buildLodgifyPaymentPatchPayloadCandidates_(booking);
-    const attempts = [];
-    let lastError = null;
+    const amount = toNumberOrZero_(
+        booking.gross_amount !== undefined ? booking.gross_amount
+            : (booking.amount !== undefined ? booking.amount : (booking.betrag || 0))
+    );
 
-    for (let methodIndex = 0; methodIndex < methodCandidates.length; methodIndex++) {
-        const method = methodCandidates[methodIndex];
-        for (let i = 0; i < pathCandidates.length; i++) {
-            const path = pathCandidates[i];
-            for (let j = 0; j < payloadCandidates.length; j++) {
-                const payload = payloadCandidates[j];
-                try {
-                    const response = lodgifyRequest(path, {
-                        method: method,
-                        payload: payload
-                    });
-                    return {
-                        ok: true,
-                        path: path,
-                        method: method,
-                        status: response.status,
-                        payload: payload,
-                        response: response.body
-                    };
-                } catch (err) {
-                    const msg = String(err && err.message ? err.message : err);
-                    attempts.push(`${method.toUpperCase()} ${path}: ${msg}`);
-                    lastError = msg;
-                    const status = extractHttpStatusFromErrorSafe_(msg);
-                    if (status === 404 || status === 405) {
-                        continue;
-                    }
-                }
-            }
-        }
+    const linkResult = createLodgifyPaymentLink_(bookingId, amount);
+    if (!linkResult || linkResult.ok !== true) {
+        throw new Error(
+            "Lodgify Zahlungslink konnte nicht erstellt werden (Buchung " + bookingId + ")."
+        );
     }
 
-    const attemptPreview = attempts.slice(-4).join(" | ");
-    const attemptedPaths = pathCandidates.join(", ");
-    Logger.log(`Lodgify payment update paths tried (${bookingId}): ${methodCandidates.join("/")} ${attemptedPaths}`);
-    const attemptedPathsPreview = attemptedPaths.length > 200 ? attemptedPaths.slice(0, 200) + "..." : attemptedPaths;
-    throw new Error(`Lodgify Payment-Update fehlgeschlagen (${bookingId}, Versuche=${attempts.length}, Methoden=${methodCandidates.join("/")}, Pfade=${attemptedPathsPreview}): ${attemptPreview || lastError || "unbekannter Fehler"}`);
+    const paymentUrl = linkResult.paymentUrl;
+    Logger.log("✅ Zahlungslink erstellt für Buchung " + bookingId + ": " + paymentUrl);
+
+    const messageText = buildPaymentRequestMessage_(paymentUrl, booking);
+    const messageResult = sendLodgifyBookingMessage_(bookingId, messageText);
+
+    if (!messageResult || messageResult.ok !== true) {
+        Logger.log(
+            "⚠️ Zahlungslink wurde erstellt, aber Gastnachricht konnte nicht gesendet werden " +
+            "für Buchung " + bookingId + ". Link: " + paymentUrl
+        );
+    }
+
+    return {
+        ok: true,
+        bookingId: bookingId,
+        paymentUrl: paymentUrl,
+        status: linkResult.status,
+        messageSent: !!(messageResult && messageResult.ok)
+    };
 }
 
 function updateLodgifyEditableBookingRow_(sheetName, rowNo, booking) {
@@ -1218,8 +1238,8 @@ function applyPaymentRequestUpdates_(sheetName, itemsById, config) {
         const paymentTriggerResult = triggerLodgifyPaymentUpdate_(enrichedBooking);
         if (!paymentTriggerResult || paymentTriggerResult.ok !== true) {
             const status = paymentTriggerResult && paymentTriggerResult.status ? `status=${paymentTriggerResult.status}` : "status=unbekannt";
-            const path = paymentTriggerResult && paymentTriggerResult.path ? `path=${paymentTriggerResult.path}` : "path=unbekannt";
-            throw new Error(`Lodgify Zahlungsanforderung für Buchung ${bookingId} fehlgeschlagen (${status}, ${path}).`);
+            const detail = paymentTriggerResult && paymentTriggerResult.paymentUrl ? `paymentUrl=${paymentTriggerResult.paymentUrl}` : "paymentUrl=unbekannt";
+            throw new Error(`Lodgify Zahlungsanforderung für Buchung ${bookingId} fehlgeschlagen (${status}, ${detail}).`);
         }
 
         if (timestampColIdx !== -1) {
