@@ -90,19 +90,26 @@ function lodgifyRequest(path, options) {
     const config = validateLodgifyConfig();
     const requestOptions = options || {};
     const method = (requestOptions.method || "get").toLowerCase();
+    const customHeaders = requestOptions.headers && typeof requestOptions.headers === "object"
+        ? requestOptions.headers
+        : {};
 
     const fetchOptions = {
         method,
         muteHttpExceptions: true,
-        headers: {
+        headers: Object.assign({
             "X-ApiKey": config.apiKey,
             Accept: "application/json"
-        }
+        }, customHeaders)
     };
 
     if (requestOptions.payload !== undefined && requestOptions.payload !== null) {
-        fetchOptions.contentType = "application/json";
-        fetchOptions.payload = JSON.stringify(requestOptions.payload);
+        fetchOptions.contentType = requestOptions.contentType || "application/json";
+        fetchOptions.payload = typeof requestOptions.payload === "string"
+            ? requestOptions.payload
+            : JSON.stringify(requestOptions.payload);
+    } else if (requestOptions.contentType) {
+        fetchOptions.contentType = requestOptions.contentType;
     }
 
     const url = lodgifyBuildUrl(path, requestOptions.queryParams);

@@ -925,10 +925,13 @@ function sendLodgifyBookingMessage_(bookingId, messageText) {
     const props = PropertiesService.getScriptProperties();
     const customPath = String(props.getProperty("LODGIFY_GUEST_MESSAGE_PATH") || "").trim();
     const encodedId = encodeURIComponent(bookingId);
+    const messageSubject = "Ihre Buchung #" + bookingId + " | Zahlungsanweisung";
+    const messageHtml = String(messageText || "").replace(/\r?\n/g, "<br>");
 
     const pathCandidates = customPath
         ? [customPath.replace(/\{id\}/g, encodedId).replace(/\{bookingId\}/g, encodedId)]
         : [
+            "/v1/reservation/booking/" + encodedId + "/messages",
             "/v2/reservations/bookings/" + encodedId + "/messages",
             "/v2/conversations/bookings/" + encodedId + "/messages",
             "/v2/inbox/bookings/" + encodedId + "/messages"
@@ -937,9 +940,26 @@ function sendLodgifyBookingMessage_(bookingId, messageText) {
     // Try multiple payload shapes to handle varying Lodgify API versions
     // (e.g. "message" vs "body" vs "content" as the message field name).
     const payloadCandidates = [
-        { message: messageText },
-        { body: messageText },
-        { content: messageText, type: "message" }
+        {
+            payload: [{ subject: messageSubject, type: "Owner", message: messageHtml }],
+            contentType: "application/json-patch+json"
+        },
+        {
+            payload: [{ subject: messageSubject, type: "Owner", body: messageHtml }],
+            contentType: "application/json-patch+json"
+        },
+        {
+            payload: { message: messageText },
+            contentType: "application/json"
+        },
+        {
+            payload: { body: messageText },
+            contentType: "application/json"
+        },
+        {
+            payload: { content: messageText, type: "message" },
+            contentType: "application/json"
+        }
     ];
 
     const attempts = [];
@@ -950,7 +970,8 @@ function sendLodgifyBookingMessage_(bookingId, messageText) {
             try {
                 const response = lodgifyRequest(path, {
                     method: "post",
-                    payload: payloadCandidates[q]
+                    payload: payloadCandidates[q].payload,
+                    contentType: payloadCandidates[q].contentType
                 });
                 return { ok: true, status: response.status, path: path };
             } catch (err) {
