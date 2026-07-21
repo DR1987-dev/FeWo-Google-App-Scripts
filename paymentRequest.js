@@ -938,6 +938,15 @@ function replaceMessageTemplatePlaceholders_(template, bookingId) {
         .replace(/\{bookingId\}/g, bookingId);
 }
 
+function buildLodgifyMessageSubject_(subjectTemplate, bookingId) {
+    const normalizedTemplate = String(subjectTemplate || "").trim();
+    if (normalizedTemplate) {
+        // Supports both placeholders for backward compatibility with existing configurations.
+        return replaceMessageTemplatePlaceholders_(normalizedTemplate, bookingId);
+    }
+    return "Ihre Buchung #" + bookingId + " | Zahlungsanweisung";
+}
+
 /**
  * Sendet eine Nachricht an den Gast über die Lodgify Messaging API.
  * Versucht mehrere Endpunkt-Kandidaten; der Pfad kann über
@@ -950,10 +959,7 @@ function sendLodgifyBookingMessage_(bookingId, messageText) {
     const configuredMessageType = String(props.getProperty("LODGIFY_GUEST_MESSAGE_TYPE") || "").trim();
     const messageType = configuredMessageType || "Owner";
     const encodedId = encodeURIComponent(bookingId);
-    const messageSubject = subjectTemplate
-        // Supports both placeholders for backward compatibility with existing configurations.
-        ? replaceMessageTemplatePlaceholders_(subjectTemplate, bookingId)
-        : "Ihre Buchung #" + bookingId + " | Zahlungsanweisung";
+    const messageSubject = buildLodgifyMessageSubject_(subjectTemplate, bookingId);
     const messageHtml = toSafeHtmlWithLineBreaks_(messageText);
 
     const pathCandidates = customPath
