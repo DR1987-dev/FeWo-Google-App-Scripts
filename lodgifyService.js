@@ -101,8 +101,10 @@ function lodgifyRequest(path, options) {
     };
 
     if (requestOptions.payload !== undefined && requestOptions.payload !== null) {
-        fetchOptions.contentType = "application/json";
+        fetchOptions.contentType = requestOptions.contentType || "application/json";
         fetchOptions.payload = JSON.stringify(requestOptions.payload);
+    } else if (requestOptions.contentType) {
+        fetchOptions.contentType = requestOptions.contentType;
     }
 
     const url = lodgifyBuildUrl(path, requestOptions.queryParams);

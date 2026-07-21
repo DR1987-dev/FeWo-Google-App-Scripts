@@ -917,6 +917,39 @@ function buildPaymentRequestMessage_(paymentUrl, booking) {
 }
 
 /**
+ * Escapes potentially unsafe HTML characters and converts line breaks to <br>.
+ * This preserves message text formatting while preventing accidental HTML/script injection.
+ */
+function toSafeHtmlWithLineBreaks_(text) {
+    // Escape ampersands first so original "&" is encoded, while entities introduced later
+    // (e.g. "&lt;") are not encoded again.
+    return String(text || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;")
+        .replace(/\r?\n/g, "<br>");
+}
+
+function replaceMessageTemplatePlaceholders_(template, bookingId) {
+    return String(template || "")
+        .replace(/\{id\}/g, bookingId)
+        .replace(/\{bookingId\}/g, bookingId);
+}
+
+const DEFAULT_LODGIFY_GUEST_MESSAGE_SUBJECT_ = "Ihre Buchung #{bookingId} | Zahlungsanweisung";
+
+function buildLodgifyMessageSubject_(subjectTemplate, bookingId) {
+    const normalizedTemplate = String(subjectTemplate || "").trim();
+    if (normalizedTemplate) {
+        // Supports both placeholders for backward compatibility with existing configurations.
+        return replaceMessageTemplatePlaceholders_(normalizedTemplate, bookingId);
+    }
+    return replaceMessageTemplatePlaceholders_(DEFAULT_LODGIFY_GUEST_MESSAGE_SUBJECT_, bookingId);
+}
+
+/**
  * Sendet eine Nachricht an den Gast über die Lodgify Messaging API.
  * Versucht mehrere Endpunkt-Kandidaten; der Pfad kann über
  * LODGIFY_GUEST_MESSAGE_PATH (Script Property) überschrieben werden.
@@ -924,11 +957,17 @@ function buildPaymentRequestMessage_(paymentUrl, booking) {
 function sendLodgifyBookingMessage_(bookingId, messageText) {
     const props = PropertiesService.getScriptProperties();
     const customPath = String(props.getProperty("LODGIFY_GUEST_MESSAGE_PATH") || "").trim();
+    const subjectTemplate = String(props.getProperty("LODGIFY_GUEST_MESSAGE_SUBJECT_TEMPLATE") || "").trim();
+    const configuredMessageType = String(props.getProperty("LODGIFY_GUEST_MESSAGE_TYPE") || "").trim();
+    const messageType = configuredMessageType || "Owner";
     const encodedId = encodeURIComponent(bookingId);
+    const messageSubject = buildLodgifyMessageSubject_(subjectTemplate, bookingId);
+    const messageHtml = toSafeHtmlWithLineBreaks_(messageText);
 
     const pathCandidates = customPath
-        ? [customPath.replace(/\{id\}/g, encodedId).replace(/\{bookingId\}/g, encodedId)]
+        ? [replaceMessageTemplatePlaceholders_(customPath, encodedId)]
         : [
+            "/v1/reservation/booking/" + encodedId + "/messages",
             "/v2/reservations/bookings/" + encodedId + "/messages",
             "/v2/conversations/bookings/" + encodedId + "/messages",
             "/v2/inbox/bookings/" + encodedId + "/messages"
@@ -937,9 +976,27 @@ function sendLodgifyBookingMessage_(bookingId, messageText) {
     // Try multiple payload shapes to handle varying Lodgify API versions
     // (e.g. "message" vs "body" vs "content" as the message field name).
     const payloadCandidates = [
-        { message: messageText },
-        { body: messageText },
-        { content: messageText, type: "message" }
+        {
+            // Lodgify v1 /reservation/booking/{id}/messages expects an array payload.
+            payload: [{ subject: messageSubject, type: messageType, message: messageHtml }],
+            contentType: "application/json-patch+json"
+        },
+        {
+            payload: [{ subject: messageSubject, type: messageType, body: messageHtml }],
+            contentType: "application/json-patch+json"
+        },
+        {
+            payload: { message: messageText },
+            contentType: "application/json"
+        },
+        {
+            payload: { body: messageText },
+            contentType: "application/json"
+        },
+        {
+            payload: { content: messageText, type: "message" },
+            contentType: "application/json"
+        }
     ];
 
     const attempts = [];
@@ -950,7 +1007,8 @@ function sendLodgifyBookingMessage_(bookingId, messageText) {
             try {
                 const response = lodgifyRequest(path, {
                     method: "post",
-                    payload: payloadCandidates[q]
+                    payload: payloadCandidates[q].payload,
+                    contentType: payloadCandidates[q].contentType
                 });
                 return { ok: true, status: response.status, path: path };
             } catch (err) {
