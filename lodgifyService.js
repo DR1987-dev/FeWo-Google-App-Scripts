@@ -97,17 +97,15 @@ function lodgifyRequest(path, options) {
     const fetchOptions = {
         method,
         muteHttpExceptions: true,
-        headers: Object.assign({
+        headers: Object.assign({}, customHeaders, {
             "X-ApiKey": config.apiKey,
             Accept: "application/json"
-        }, customHeaders)
+        })
     };
 
     if (requestOptions.payload !== undefined && requestOptions.payload !== null) {
         fetchOptions.contentType = requestOptions.contentType || "application/json";
-        fetchOptions.payload = typeof requestOptions.payload === "string"
-            ? requestOptions.payload
-            : JSON.stringify(requestOptions.payload);
+        fetchOptions.payload = JSON.stringify(requestOptions.payload);
     } else if (requestOptions.contentType) {
         fetchOptions.contentType = requestOptions.contentType;
     }

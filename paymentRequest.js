@@ -916,6 +916,10 @@ function buildPaymentRequestMessage_(paymentUrl, booking) {
         "www.davids-apartment.de";
 }
 
+/**
+ * Escapes potentially unsafe HTML characters and converts line breaks to <br>.
+ * This preserves message text formatting while preventing accidental HTML/script injection.
+ */
 function toSafeHtmlWithLineBreaks_(text) {
     return String(text || "")
         .replace(/&/g, "&amp;")
@@ -935,6 +939,7 @@ function sendLodgifyBookingMessage_(bookingId, messageText) {
     const props = PropertiesService.getScriptProperties();
     const customPath = String(props.getProperty("LODGIFY_GUEST_MESSAGE_PATH") || "").trim();
     const subjectTemplate = String(props.getProperty("LODGIFY_GUEST_MESSAGE_SUBJECT_TEMPLATE") || "").trim();
+    const messageType = String(props.getProperty("LODGIFY_GUEST_MESSAGE_TYPE") || "Owner").trim() || "Owner";
     const encodedId = encodeURIComponent(bookingId);
     const messageSubject = subjectTemplate
         ? subjectTemplate.replace(/\{id\}/g, bookingId).replace(/\{bookingId\}/g, bookingId)
@@ -954,11 +959,11 @@ function sendLodgifyBookingMessage_(bookingId, messageText) {
     // (e.g. "message" vs "body" vs "content" as the message field name).
     const payloadCandidates = [
         {
-            payload: [{ subject: messageSubject, type: "Owner", message: messageHtml }],
+            payload: [{ subject: messageSubject, type: messageType, message: messageHtml }],
             contentType: "application/json-patch+json"
         },
         {
-            payload: [{ subject: messageSubject, type: "Owner", body: messageHtml }],
+            payload: [{ subject: messageSubject, type: messageType, body: messageHtml }],
             contentType: "application/json-patch+json"
         },
         {
