@@ -488,6 +488,19 @@ function parsePaymentAmountValue_(value) {
     return Number.isFinite(parsed) ? parsed : 0;
 }
 
+const PAYMENT_AMOUNT_DIRECT_KEYS_ = [
+    "total", "grandTotal", "grand_total", "totalAmount", "total_amount",
+    "price", "bookingAmount", "booking_amount", "amountToPay", "amount_to_pay",
+    "amount", "amountDue", "amount_due"
+];
+
+const PAYMENT_AMOUNT_DEEP_PATHS_ = [
+    "quote.total", "quote.totalAmount", "quote.total_amount",
+    "reservation.total", "reservation.totalAmount", "reservation.total_amount",
+    "financials.total", "financials.totalAmount", "financials.total_amount",
+    "charges.total", "invoice.total"
+];
+
 function resolveBookingPaymentAmount_(booking) {
     if (!booking) return 0;
     const raw = booking.raw && typeof booking.raw === "object" ? booking.raw : {};
@@ -508,25 +521,11 @@ function resolveBookingPaymentAmount_(booking) {
         if (amount > 0) return amount;
     }
 
-    const deepPaths = [
-        "quote.total", "quote.totalAmount", "quote.total_amount",
-        "reservation.total", "reservation.totalAmount", "reservation.total_amount",
-        "financials.total", "financials.totalAmount", "financials.total_amount",
-        "charges.total", "invoice.total"
-    ];
     if (typeof extractAmountFromPaths_ === "function") {
-        const nestedBookingAmount = parsePaymentAmountValue_(extractAmountFromPaths_(booking, [
-            "total", "grandTotal", "grand_total", "totalAmount", "total_amount",
-            "price", "bookingAmount", "booking_amount", "amountToPay", "amount_to_pay",
-            "amount", "amountDue", "amount_due"
-        ], deepPaths));
+        const nestedBookingAmount = parsePaymentAmountValue_(extractAmountFromPaths_(booking, PAYMENT_AMOUNT_DIRECT_KEYS_, PAYMENT_AMOUNT_DEEP_PATHS_));
         if (nestedBookingAmount > 0) return nestedBookingAmount;
 
-        const nestedRawAmount = parsePaymentAmountValue_(extractAmountFromPaths_(raw, [
-            "total", "grandTotal", "grand_total", "totalAmount", "total_amount",
-            "price", "bookingAmount", "booking_amount", "amountToPay", "amount_to_pay",
-            "amount", "amountDue", "amount_due"
-        ], deepPaths));
+        const nestedRawAmount = parsePaymentAmountValue_(extractAmountFromPaths_(raw, PAYMENT_AMOUNT_DIRECT_KEYS_, PAYMENT_AMOUNT_DEEP_PATHS_));
         if (nestedRawAmount > 0) return nestedRawAmount;
     }
 
@@ -776,7 +775,7 @@ function createLodgifyPaymentLink_(bookingId, amount) {
     }
     const path = "/v2/reservations/bookings/" + encodeURIComponent(bookingId) + "/quote/paymentLink";
     const url = lodgifyBuildUrl(path, null);
-    const payload = JSON.stringify({ amount: Number(normalizedAmount.toFixed(2)) });
+    const payload = JSON.stringify({ amount: Math.round(normalizedAmount * 100) / 100 });
 
     const fetchOptions = {
         method: "post",
