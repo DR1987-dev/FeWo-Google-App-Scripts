@@ -883,11 +883,11 @@ function buildPaymentRequestMessage_(paymentUrl, booking) {
     }
 
     if (isGerman) {
-        return "Hallo " + firstName + ",\n" +
+        return "Hallo " + firstName + ",\n\n" +
             "Bitte bezahlen Sie EUR" + amountFormatted + " für Ihre Buchung #" + bookingId + " für David´s Apartment.\n" +
             "Bitte folgen Sie den Zahlungsanweisungen:\n" +
             "Sie können den Betrag von EUR " + amountFormatted + "  mit allen gängigen Zahlungsmitteln bezahlen.\n" +
-            "Sollte der oben stehende Link nicht funktionieren, können Sie diese Adresse kopieren und in Ihren Browser einfügen:  " + (paymentUrl || "") + " \n" +
+            "Sollte der nachfolgende Link nicht funktionieren, können Sie diese Adresse kopieren und in Ihren Browser einfügen:  " + (paymentUrl || "") + " \n\n" +
             "Sie können per Banküberweisung zahlen an: IBAN: DE90120300001074313477" +
             "SWIFT: Name der Bank: Deutsche KreditbankName des Empfängers: David's Apartment" +
             "Zahlungsreferenz: Bitte Check-In Datum eintragen Betrag: EUR " + amountFormatted + "\n\n" +
@@ -898,13 +898,13 @@ function buildPaymentRequestMessage_(paymentUrl, booking) {
             "www.davids-apartment.de";
     }
 
-    return "Hello " + firstName + ",\n" +
+    return "Hello " + firstName + ",\n\n" +
         "Could you please proceed to pay EUR" + amountFormatted + " related to your booking #" + bookingId + " for David´s Apartment.\n" +
         "Please follow the payment instructions:\n" +
         "You can pay with any common payment methode the amount of EUR " + amountFormatted + ".\n" +
-        "If the above link does not work, please copy and paste this address into your browser: \n" +
+        "If the below link does not work, please copy and paste this address into your browser: \n" +
         (paymentUrl || "") + "\n" +
-        "You can pay by bank transfer to:\n" +
+        "You can pay by bank transfer to:\n\n" +
         "IBAN: DE90120300001074313477\n" +
         "SWIFT: \n" +
         "Bank Name: Deutsche Kreditbank\n" +
