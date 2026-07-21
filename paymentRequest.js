@@ -916,6 +916,16 @@ function buildPaymentRequestMessage_(paymentUrl, booking) {
         "www.davids-apartment.de";
 }
 
+function toSafeHtmlWithLineBreaks_(text) {
+    return String(text || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;")
+        .replace(/\r?\n/g, "<br>");
+}
+
 /**
  * Sendet eine Nachricht an den Gast über die Lodgify Messaging API.
  * Versucht mehrere Endpunkt-Kandidaten; der Pfad kann über
@@ -924,9 +934,12 @@ function buildPaymentRequestMessage_(paymentUrl, booking) {
 function sendLodgifyBookingMessage_(bookingId, messageText) {
     const props = PropertiesService.getScriptProperties();
     const customPath = String(props.getProperty("LODGIFY_GUEST_MESSAGE_PATH") || "").trim();
+    const subjectTemplate = String(props.getProperty("LODGIFY_GUEST_MESSAGE_SUBJECT_TEMPLATE") || "").trim();
     const encodedId = encodeURIComponent(bookingId);
-    const messageSubject = "Ihre Buchung #" + bookingId + " | Zahlungsanweisung";
-    const messageHtml = String(messageText || "").replace(/\r?\n/g, "<br>");
+    const messageSubject = subjectTemplate
+        ? subjectTemplate.replace(/\{id\}/g, bookingId).replace(/\{bookingId\}/g, bookingId)
+        : "Ihre Buchung #" + bookingId + " | Zahlungsanweisung";
+    const messageHtml = toSafeHtmlWithLineBreaks_(messageText);
 
     const pathCandidates = customPath
         ? [customPath.replace(/\{id\}/g, encodedId).replace(/\{bookingId\}/g, encodedId)]
