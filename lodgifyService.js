@@ -90,9 +90,15 @@ function lodgifyRequest(path, options) {
     const config = validateLodgifyConfig();
     const requestOptions = options || {};
     const method = (requestOptions.method || "get").toLowerCase();
-    const customHeaders = requestOptions.headers && typeof requestOptions.headers === "object"
+    const rawCustomHeaders = requestOptions.headers && typeof requestOptions.headers === "object"
         ? requestOptions.headers
         : {};
+    const customHeaders = {};
+    Object.keys(rawCustomHeaders).forEach(key => {
+        const lower = String(key || "").toLowerCase();
+        if (lower === "x-apikey" || lower === "accept") return;
+        customHeaders[key] = rawCustomHeaders[key];
+    });
 
     const fetchOptions = {
         method,

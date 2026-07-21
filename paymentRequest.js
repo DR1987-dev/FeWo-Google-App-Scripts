@@ -939,9 +939,11 @@ function sendLodgifyBookingMessage_(bookingId, messageText) {
     const props = PropertiesService.getScriptProperties();
     const customPath = String(props.getProperty("LODGIFY_GUEST_MESSAGE_PATH") || "").trim();
     const subjectTemplate = String(props.getProperty("LODGIFY_GUEST_MESSAGE_SUBJECT_TEMPLATE") || "").trim();
-    const messageType = String(props.getProperty("LODGIFY_GUEST_MESSAGE_TYPE") || "Owner").trim() || "Owner";
+    const configuredMessageType = String(props.getProperty("LODGIFY_GUEST_MESSAGE_TYPE") || "").trim();
+    const messageType = configuredMessageType || "Owner";
     const encodedId = encodeURIComponent(bookingId);
     const messageSubject = subjectTemplate
+        // Supports both placeholders for backward compatibility with existing configurations.
         ? subjectTemplate.replace(/\{id\}/g, bookingId).replace(/\{bookingId\}/g, bookingId)
         : "Ihre Buchung #" + bookingId + " | Zahlungsanweisung";
     const messageHtml = toSafeHtmlWithLineBreaks_(messageText);
