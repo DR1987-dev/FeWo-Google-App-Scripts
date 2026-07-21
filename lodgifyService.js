@@ -21,11 +21,6 @@ function getLodgifyConfig() {
     };
 }
 
-const LODGIFY_PROTECTED_REQUEST_HEADERS_ = {
-    "x-apikey": true,
-    accept: true
-};
-
 function validateLodgifyConfig() {
     const config = getLodgifyConfig();
     if (!config.apiKey) {
@@ -95,23 +90,14 @@ function lodgifyRequest(path, options) {
     const config = validateLodgifyConfig();
     const requestOptions = options || {};
     const method = (requestOptions.method || "get").toLowerCase();
-    const rawCustomHeaders = requestOptions.headers && typeof requestOptions.headers === "object"
-        ? requestOptions.headers
-        : {};
-    const customHeaders = {};
-    Object.keys(rawCustomHeaders).forEach(key => {
-        const lower = String(key || "").toLowerCase();
-        if (LODGIFY_PROTECTED_REQUEST_HEADERS_[lower]) return;
-        customHeaders[key] = rawCustomHeaders[key];
-    });
 
     const fetchOptions = {
         method,
         muteHttpExceptions: true,
-        headers: Object.assign({}, customHeaders, {
+        headers: {
             "X-ApiKey": config.apiKey,
             Accept: "application/json"
-        })
+        }
     };
 
     if (requestOptions.payload !== undefined && requestOptions.payload !== null) {

@@ -921,6 +921,8 @@ function buildPaymentRequestMessage_(paymentUrl, booking) {
  * This preserves message text formatting while preventing accidental HTML/script injection.
  */
 function toSafeHtmlWithLineBreaks_(text) {
+    // Escape ampersands first so original "&" is encoded, while entities introduced later
+    // (e.g. "&lt;") are not encoded again.
     return String(text || "")
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
@@ -967,6 +969,7 @@ function sendLodgifyBookingMessage_(bookingId, messageText) {
     // (e.g. "message" vs "body" vs "content" as the message field name).
     const payloadCandidates = [
         {
+            // Lodgify v1 /reservation/booking/{id}/messages expects an array payload.
             payload: [{ subject: messageSubject, type: messageType, message: messageHtml }],
             contentType: "application/json-patch+json"
         },
