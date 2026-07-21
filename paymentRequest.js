@@ -455,15 +455,82 @@ function computeLodgifyNetAmount_(grossAmount, feesTotal) {
  * Resolves the effective booking amount for payment requests.
  * Uses gross_amount if > 0; otherwise falls back to payout_amount, net_amount, amount, betrag.
  */
+function parsePaymentAmountValue_(value) {
+    if (value === null || value === undefined || value === "") return 0;
+
+    if (typeof value === "object" && !Array.isArray(value) && typeof resolveAmountObject_ === "function") {
+        const resolved = Number(resolveAmountObject_(value));
+        if (Number.isFinite(resolved)) return resolved;
+    }
+
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) return numeric;
+
+    if (typeof value !== "string") return 0;
+    let normalized = String(value).trim();
+    if (!normalized) return 0;
+
+    normalized = normalized
+        .replace(/[€$£]/g, "")
+        .replace(/\s+/g, "");
+
+    const commaPos = normalized.lastIndexOf(",");
+    const dotPos = normalized.lastIndexOf(".");
+    if (commaPos !== -1 && dotPos !== -1) {
+        normalized = commaPos > dotPos
+            ? normalized.replace(/\./g, "").replace(",", ".")
+            : normalized.replace(/,/g, "");
+    } else if (commaPos !== -1) {
+        normalized = normalized.replace(",", ".");
+    }
+
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function resolveBookingPaymentAmount_(booking) {
     if (!booking) return 0;
-    var gross = toNumberOrZero_(booking.gross_amount);
-    if (gross > 0) return gross;
-    var payout = toNumberOrZero_(booking.payout_amount);
-    if (payout > 0) return payout;
-    var net = toNumberOrZero_(booking.net_amount);
-    if (net > 0) return net;
-    return toNumberOrZero_(booking.amount || booking.betrag || 0);
+    const raw = booking.raw && typeof booking.raw === "object" ? booking.raw : {};
+
+    const candidates = [
+        booking.gross_amount, booking.grossAmount, booking.total, booking.grandTotal,
+        raw.gross_amount, raw.grossAmount, raw.total, raw.grandTotal,
+        booking.payout_amount, booking.payoutAmount,
+        raw.payout_amount, raw.payoutAmount,
+        booking.net_amount, booking.netAmount,
+        raw.net_amount, raw.netAmount,
+        booking.amount, booking.betrag,
+        raw.amount, raw.betrag
+    ];
+
+    for (let i = 0; i < candidates.length; i++) {
+        const amount = parsePaymentAmountValue_(candidates[i]);
+        if (amount > 0) return amount;
+    }
+
+    const deepPaths = [
+        "quote.total", "quote.totalAmount", "quote.total_amount",
+        "reservation.total", "reservation.totalAmount", "reservation.total_amount",
+        "financials.total", "financials.totalAmount", "financials.total_amount",
+        "charges.total", "invoice.total"
+    ];
+    if (typeof extractAmountFromPaths_ === "function") {
+        const nestedBookingAmount = parsePaymentAmountValue_(extractAmountFromPaths_(booking, [
+            "total", "grandTotal", "grand_total", "totalAmount", "total_amount",
+            "price", "bookingAmount", "booking_amount", "amountToPay", "amount_to_pay",
+            "amount", "amountDue", "amount_due"
+        ], deepPaths));
+        if (nestedBookingAmount > 0) return nestedBookingAmount;
+
+        const nestedRawAmount = parsePaymentAmountValue_(extractAmountFromPaths_(raw, [
+            "total", "grandTotal", "grand_total", "totalAmount", "total_amount",
+            "price", "bookingAmount", "booking_amount", "amountToPay", "amount_to_pay",
+            "amount", "amountDue", "amount_due"
+        ], deepPaths));
+        if (nestedRawAmount > 0) return nestedRawAmount;
+    }
+
+    return 0;
 }
 
 function extractHttpStatusFromErrorSafe_(msg) {
@@ -700,7 +767,8 @@ function shouldTriggerLodgifyPaymentUpdate_(booking) {
  */
 function createLodgifyPaymentLink_(bookingId, amount) {
     const config = validateLodgifyConfig();
-    if (Number(amount) <= 0) {
+    const normalizedAmount = parsePaymentAmountValue_(amount);
+    if (normalizedAmount <= 0) {
         throw new Error(
             "Lodgify Zahlungslink-Erstellung abgebrochen: Betrag muss positiv sein " +
             "(erhalten: " + amount + ") für Buchung " + bookingId + "."
@@ -708,7 +776,7 @@ function createLodgifyPaymentLink_(bookingId, amount) {
     }
     const path = "/v2/reservations/bookings/" + encodeURIComponent(bookingId) + "/quote/paymentLink";
     const url = lodgifyBuildUrl(path, null);
-    const payload = JSON.stringify({ amount: Number(amount) });
+    const payload = JSON.stringify({ amount: Number(normalizedAmount.toFixed(2)) });
 
     const fetchOptions = {
         method: "post",
@@ -741,16 +809,35 @@ function createLodgifyPaymentLink_(bookingId, amount) {
         );
     }
 
-    // The documented response is a plain-text URL string (Accept: text/plain).
-    // As a safeguard, handle JSON responses as well since some Lodgify API versions
-    // wrap the link in a JSON object with varying field names.
-    let paymentUrl;
+    const paymentLinkGetResponse = UrlFetchApp.fetch(url, {
+        method: "get",
+        muteHttpExceptions: true,
+        headers: {
+            "X-ApiKey": config.apiKey,
+            Accept: "text/plain"
+        }
+    });
+    const getStatus = paymentLinkGetResponse.getResponseCode();
+    const getBodyText = paymentLinkGetResponse.getContentText() || "";
+    if (getStatus < 200 || getStatus >= 300) {
+        throw new Error(
+            "Lodgify Zahlungslink konnte nach Erstellung nicht geladen werden (" + getStatus + ") für Buchung " + bookingId + ": " + getBodyText
+        );
+    }
+
+    let paymentUrl = "";
     try {
-        const parsed = JSON.parse(bodyText);
+        const parsed = JSON.parse(getBodyText);
         paymentUrl = parsed.url || parsed.link || parsed.payment_link || parsed.paymentLink
-            || parsed.payment_url || parsed.paymentUrl || String(bodyText).trim();
+            || parsed.payment_url || parsed.paymentUrl || "";
     } catch (e) {
-        paymentUrl = String(bodyText).trim();
+        paymentUrl = String(getBodyText).trim();
+    }
+
+    if (!paymentUrl) {
+        throw new Error(
+            "Lodgify Zahlungslink-Antwort enthielt keine URL für Buchung " + bookingId + ". Antwort: " + getBodyText
+        );
     }
 
     return { ok: true, status: status, paymentUrl: paymentUrl };
