@@ -21,6 +21,11 @@ function getLodgifyConfig() {
     };
 }
 
+const LODGIFY_PROTECTED_REQUEST_HEADERS_ = {
+    "x-apikey": true,
+    accept: true
+};
+
 function validateLodgifyConfig() {
     const config = getLodgifyConfig();
     if (!config.apiKey) {
@@ -96,7 +101,7 @@ function lodgifyRequest(path, options) {
     const customHeaders = {};
     Object.keys(rawCustomHeaders).forEach(key => {
         const lower = String(key || "").toLowerCase();
-        if (lower === "x-apikey" || lower === "accept") return;
+        if (LODGIFY_PROTECTED_REQUEST_HEADERS_[lower]) return;
         customHeaders[key] = rawCustomHeaders[key];
     });
 

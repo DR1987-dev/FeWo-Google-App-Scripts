@@ -930,6 +930,12 @@ function toSafeHtmlWithLineBreaks_(text) {
         .replace(/\r?\n/g, "<br>");
 }
 
+function replaceMessageTemplatePlaceholders_(template, bookingId) {
+    return String(template || "")
+        .replace(/\{id\}/g, bookingId)
+        .replace(/\{bookingId\}/g, bookingId);
+}
+
 /**
  * Sendet eine Nachricht an den Gast über die Lodgify Messaging API.
  * Versucht mehrere Endpunkt-Kandidaten; der Pfad kann über
@@ -944,12 +950,12 @@ function sendLodgifyBookingMessage_(bookingId, messageText) {
     const encodedId = encodeURIComponent(bookingId);
     const messageSubject = subjectTemplate
         // Supports both placeholders for backward compatibility with existing configurations.
-        ? subjectTemplate.replace(/\{id\}/g, bookingId).replace(/\{bookingId\}/g, bookingId)
+        ? replaceMessageTemplatePlaceholders_(subjectTemplate, bookingId)
         : "Ihre Buchung #" + bookingId + " | Zahlungsanweisung";
     const messageHtml = toSafeHtmlWithLineBreaks_(messageText);
 
     const pathCandidates = customPath
-        ? [customPath.replace(/\{id\}/g, encodedId).replace(/\{bookingId\}/g, encodedId)]
+        ? [replaceMessageTemplatePlaceholders_(customPath, encodedId)]
         : [
             "/v1/reservation/booking/" + encodedId + "/messages",
             "/v2/reservations/bookings/" + encodedId + "/messages",
