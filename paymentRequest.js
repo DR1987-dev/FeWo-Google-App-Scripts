@@ -775,7 +775,7 @@ function createLodgifyPaymentLink_(bookingId, amount) {
     }
     const path = "/v2/reservations/bookings/" + encodeURIComponent(bookingId) + "/quote/paymentLink";
     const url = lodgifyBuildUrl(path, null);
-    const payload = JSON.stringify({ amount: Math.round(normalizedAmount * 100) / 100 });
+    const payload = JSON.stringify({ amount: Number(normalizedAmount.toFixed(2)) });
 
     const fetchOptions = {
         method: "post",
@@ -839,7 +839,7 @@ function createLodgifyPaymentLink_(bookingId, amount) {
         );
     }
 
-    return { ok: true, status: status, paymentUrl: paymentUrl };
+    return { ok: true, status: getStatus, paymentUrl: paymentUrl };
 }
 
 /**
