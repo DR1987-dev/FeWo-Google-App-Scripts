@@ -938,13 +938,15 @@ function replaceMessageTemplatePlaceholders_(template, bookingId) {
         .replace(/\{bookingId\}/g, bookingId);
 }
 
+const DEFAULT_LODGIFY_GUEST_MESSAGE_SUBJECT_ = "Ihre Buchung #{bookingId} | Zahlungsanweisung";
+
 function buildLodgifyMessageSubject_(subjectTemplate, bookingId) {
     const normalizedTemplate = String(subjectTemplate || "").trim();
     if (normalizedTemplate) {
         // Supports both placeholders for backward compatibility with existing configurations.
         return replaceMessageTemplatePlaceholders_(normalizedTemplate, bookingId);
     }
-    return "Ihre Buchung #" + bookingId + " | Zahlungsanweisung";
+    return replaceMessageTemplatePlaceholders_(DEFAULT_LODGIFY_GUEST_MESSAGE_SUBJECT_, bookingId);
 }
 
 /**
