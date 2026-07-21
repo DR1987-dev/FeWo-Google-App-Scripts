@@ -859,7 +859,9 @@ function buildPaymentRequestMessage_(paymentUrl, booking) {
     const customTemplate = String(props.getProperty("PAYMENT_REQUEST_MESSAGE_TEMPLATE") || "").trim();
 
     const bookingId = String(booking && (booking.lodgify_booking_id || booking.id) || "").trim();
-    const guestName = String(booking && booking.guest_name || "").trim();
+    const guestName = booking
+        ? String(extractLodgifyGuestName_(booking) || booking.guest_name || "").trim()
+        : "";
     const firstName = guestName ? guestName.split(/\s+/)[0] : "";
     const amount = resolveBookingPaymentAmount_(booking);
 
