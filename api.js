@@ -36,27 +36,44 @@ function addAusgabeFromSheet() {
     );
     if (amountResp.getSelectedButton() !== ui.Button.OK) return;
 
-    var amountValue = parseFloat(String(amountResp.getResponseText()).replace(",", "."));
+    // Normalise amount: remove thousands separators, replace decimal comma with period
+    var amountRaw = String(amountResp.getResponseText()).trim();
+    var amountNormalised = amountRaw.replace(/[^\d,\.]/g, "");
+    // Detect European format "1.234,56" vs. "1,234.56"
+    var lastComma = amountNormalised.lastIndexOf(",");
+    var lastPeriod = amountNormalised.lastIndexOf(".");
+    if (lastComma > lastPeriod) {
+        // Comma is decimal separator (European): remove periods, replace comma with period
+        amountNormalised = amountNormalised.replace(/\./g, "").replace(",", ".");
+    } else {
+        // Period is decimal separator: remove commas
+        amountNormalised = amountNormalised.replace(/,/g, "");
+    }
+    var amountValue = parseFloat(amountNormalised);
     if (isNaN(amountValue) || amountValue <= 0) {
         ui.alert("Fehler", "Ungültiger Betrag. Bitte eine positive Zahl eingeben.", ui.ButtonSet.OK);
         return;
     }
 
-    var result = createExpenseRow_({
-        date: String(dateResp.getResponseText()).trim(),
-        category: String(categoryResp.getResponseText()).trim() || "Sonstiges",
-        note: String(noteResp.getResponseText()).trim() || "Ausgabe",
-        amount: amountValue
-    });
+    try {
+        var result = createExpenseRow_({
+            date: String(dateResp.getResponseText()).trim(),
+            category: String(categoryResp.getResponseText()).trim() || "Sonstiges",
+            note: String(noteResp.getResponseText()).trim() || "Ausgabe",
+            amount: amountValue
+        });
 
-    ui.alert(
-        "✅ Ausgabe gespeichert",
-        "Kostenart: " + result.category +
-        "\nBeschreibung: " + result.note +
-        "\nBetrag: " + result.amount + " EUR" +
-        "\nDatum: " + result.date,
-        ui.ButtonSet.OK
-    );
+        ui.alert(
+            "✅ Ausgabe gespeichert",
+            "Kostenart: " + result.category +
+            "\nBeschreibung: " + result.note +
+            "\nBetrag: " + result.amount + " EUR" +
+            "\nDatum: " + result.date,
+            ui.ButtonSet.OK
+        );
+    } catch (err) {
+        ui.alert("❌ Fehler beim Speichern", String(err && err.message ? err.message : err), ui.ButtonSet.OK);
+    }
 }
 
 function initApiConfig(key) {
