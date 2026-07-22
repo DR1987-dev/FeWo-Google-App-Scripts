@@ -1,3 +1,81 @@
+function onOpen() {
+    SpreadsheetApp.getUi()
+        .createMenu("FeWo Tools")
+        .addItem("Ausgabe erfassen", "addAusgabeFromSheet")
+        .addToUi();
+}
+
+function addAusgabeFromSheet() {
+    var ui = SpreadsheetApp.getUi();
+
+    var dateResp = ui.prompt(
+        "Ausgabe erfassen (1/4)",
+        "Datum (JJJJ-MM-TT) – leer lassen für heute:",
+        ui.ButtonSet.OK_CANCEL
+    );
+    if (dateResp.getSelectedButton() !== ui.Button.OK) return;
+
+    var categoryResp = ui.prompt(
+        "Ausgabe erfassen (2/4)",
+        "Kostenart (z.B. Reinigung, Reparatur, Sonstiges):",
+        ui.ButtonSet.OK_CANCEL
+    );
+    if (categoryResp.getSelectedButton() !== ui.Button.OK) return;
+
+    var noteResp = ui.prompt(
+        "Ausgabe erfassen (3/4)",
+        "Beschreibung / Notiz:",
+        ui.ButtonSet.OK_CANCEL
+    );
+    if (noteResp.getSelectedButton() !== ui.Button.OK) return;
+
+    var amountResp = ui.prompt(
+        "Ausgabe erfassen (4/4)",
+        "Betrag in EUR (positiver Wert, z.B. 123.45):",
+        ui.ButtonSet.OK_CANCEL
+    );
+    if (amountResp.getSelectedButton() !== ui.Button.OK) return;
+
+    // Normalise amount: remove thousands separators, replace decimal comma with period
+    var amountRaw = String(amountResp.getResponseText()).trim();
+    var amountNormalised = amountRaw.replace(/[^\d,\.]/g, "");
+    // Detect European format "1.234,56" vs. "1,234.56"
+    var lastComma = amountNormalised.lastIndexOf(",");
+    var lastPeriod = amountNormalised.lastIndexOf(".");
+    if (lastComma > lastPeriod) {
+        // Comma is decimal separator (European): remove periods, replace comma with period
+        amountNormalised = amountNormalised.replace(/\./g, "").replace(",", ".");
+    } else {
+        // Period is decimal separator: remove commas
+        amountNormalised = amountNormalised.replace(/,/g, "");
+    }
+    var amountValue = parseFloat(amountNormalised);
+    if (isNaN(amountValue) || amountValue <= 0) {
+        ui.alert("Fehler", "Ungültiger Betrag. Bitte eine positive Zahl eingeben.", ui.ButtonSet.OK);
+        return;
+    }
+
+    try {
+        var result = createExpenseRow_({
+            date: String(dateResp.getResponseText()).trim(),
+            category: String(categoryResp.getResponseText()).trim() || "Sonstiges",
+            note: String(noteResp.getResponseText()).trim() || "Ausgabe",
+            amount: amountValue
+        });
+
+        ui.alert(
+            "✅ Ausgabe gespeichert",
+            "Kostenart: " + result.category +
+            "\nBeschreibung: " + result.note +
+            "\nBetrag: " + result.amount + " EUR" +
+            "\nDatum: " + result.date,
+            ui.ButtonSet.OK
+        );
+    } catch (err) {
+        ui.alert("❌ Fehler beim Speichern", String(err && err.message ? err.message : err), ui.ButtonSet.OK);
+    }
+}
+
 function initApiConfig(key) {
     setLodgifyApiKey(key);
 }
