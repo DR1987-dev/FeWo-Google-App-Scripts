@@ -1,7 +1,7 @@
 // ============================================================
 // Lexware Office API Integration
 // API Docs: https://developers.lexware.io/docs/public-api/
-// Auth:     ****** via Script Property LEXWARE_API_KEY
+// Auth:     ****** stored in Script Property LEXWARE_API_KEY
 // ============================================================
 
 var LEXWARE_BASE_URL = "https://api.lexware.io/v1";
@@ -87,10 +87,9 @@ function lexwareHealthCheck() {
 
 function lexwareInvoiceContactName_(invoice) {
     var addr = invoice.address || {};
-    var parts = [];
-    if (addr.name) parts.push(addr.name);
-    else if (addr.contactId) parts.push(addr.contactId);
-    return parts.join(" ") || "";
+    if (addr.name) return addr.name;
+    if (addr.contactId) return addr.contactId;
+    return "";
 }
 
 function lexwareInvoiceTotalNet_(invoice) {
