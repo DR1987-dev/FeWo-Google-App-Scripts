@@ -79,6 +79,21 @@ function lexwareGetInvoices(page, pageSize) {
     });
 }
 
+/**
+ * Fetches a page of vouchers from GET /v1/vouchers.
+ * @param {string|null} voucherType - e.g. "invoice", "purchaseinvoice", or null for all types.
+ * @param {number} page - 0-based page index.
+ * @param {number} pageSize - items per page (max 100).
+ */
+function lexwareGetVouchers_(voucherType, page, pageSize) {
+    var params = {
+        page: page || 0,
+        size: pageSize || 100
+    };
+    if (voucherType) params.voucherType = voucherType;
+    return lexwareRequest("/vouchers", params);
+}
+
 function lexwareHealthCheck() {
     return lexwareRequest("/ping");
 }
@@ -226,4 +241,178 @@ function importLexwareToSheet() {
         inserted: newRows.length,
         updated: updatedCount
     };
+}
+
+// ---- Voucher import (Einnahmen / Ausgaben / Umsätze) -------
+
+var LEXWARE_VOUCHER_HEADERS = [
+    "ID",
+    "Belegtyp",
+    "Status",
+    "Belegnummer",
+    "Belegdatum",
+    "Fälligkeitsdatum",
+    "Kontakt",
+    "Gesamtbetrag",
+    "Währung",
+    "Bemerkung"
+];
+
+/**
+ * Fetches all pages of vouchers (optionally filtered by voucherType) and
+ * upserts them into the given sheet. Rows are matched by voucher ID.
+ *
+ * @param {string|null} voucherType - API filter value ("invoice", "purchaseinvoice", …)
+ *                                    or null/undefined to fetch all types.
+ * @param {string} sheetName - target sheet name (created if absent).
+ * @return {{ok:boolean, sheet:string, total:number, inserted:number, updated:number}}
+ */
+function lexwareImportVouchersToSheet_(voucherType, sheetName) {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) throw new Error("No active spreadsheet");
+
+    var sheet = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
+
+    if (sheet.getLastRow() === 0) {
+        sheet.appendRow(LEXWARE_VOUCHER_HEADERS);
+        sheet.getRange(1, 1, 1, LEXWARE_VOUCHER_HEADERS.length).setFontWeight("bold");
+    }
+
+    // Index existing rows by voucher ID (column 1)
+    var existingById = {};
+    var lastRow = sheet.getLastRow();
+    if (lastRow > 1) {
+        var existingData = sheet.getRange(2, 1, lastRow - 1, LEXWARE_VOUCHER_HEADERS.length).getValues();
+        existingData.forEach(function (row, idx) {
+            var id = String(row[0] || "").trim();
+            if (id) existingById[id] = { rowIndex: idx + 2, data: row };
+        });
+    }
+
+    // Fetch all pages
+    var allVouchers = [];
+    var page = 0;
+    var pageSize = 100;
+    var totalPages = 1;
+
+    do {
+        var result = lexwareGetVouchers_(voucherType || null, page, pageSize);
+        var body = result.body;
+
+        if (!body || !body.content) {
+            Logger.log("Lexware vouchers: unexpected response on page " + page + ": " + JSON.stringify(body));
+            break;
+        }
+
+        allVouchers = allVouchers.concat(body.content);
+
+        // The vouchers endpoint wraps pagination in a nested "page" object.
+        var pageInfo = body.page || {};
+        totalPages = pageInfo.totalPages !== undefined ? pageInfo.totalPages
+                   : (body.totalPages !== undefined ? body.totalPages : 1);
+        page++;
+    } while (page < totalPages);
+
+    Logger.log(
+        "Lexware vouchers (" + (voucherType || "all") + "): fetched " +
+        allVouchers.length + " records across " + totalPages + " page(s)"
+    );
+
+    var newRows = [];
+    var updatedCount = 0;
+
+    allVouchers.forEach(function (v) {
+        var id = String(v.id || "").trim();
+        if (!id) return;
+
+        var row = [
+            id,
+            v.voucherType || "",
+            v.voucherStatus || "",
+            v.voucherNumber || "",
+            v.voucherDate ? String(v.voucherDate).slice(0, 10) : "",
+            v.dueDate ? String(v.dueDate).slice(0, 10) : "",
+            v.contactName || "",
+            v.totalAmount !== undefined ? v.totalAmount : "",
+            v.currency || "EUR",
+            v.remark || ""
+        ];
+
+        if (existingById[id]) {
+            var existing = existingById[id].data;
+            var changed = row.some(function (val, i) { return String(val) !== String(existing[i]); });
+            if (changed) {
+                sheet.getRange(existingById[id].rowIndex, 1, 1, row.length).setValues([row]);
+                updatedCount++;
+            }
+        } else {
+            newRows.push(row);
+        }
+    });
+
+    if (newRows.length > 0) {
+        sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, newRows[0].length).setValues(newRows);
+    }
+
+    Logger.log(
+        "Lexware vouchers (" + (voucherType || "all") + ") import complete: " +
+        "total=" + allVouchers.length +
+        ", inserted=" + newRows.length +
+        ", updated=" + updatedCount
+    );
+
+    return {
+        ok: true,
+        sheet: sheetName,
+        total: allVouchers.length,
+        inserted: newRows.length,
+        updated: updatedCount
+    };
+}
+
+/**
+ * Imports income vouchers (Einnahmen) into the "Lexware_Einnahmen" sheet.
+ * Uses GET /v1/vouchers?voucherType=invoice.
+ * Override the sheet name with the script property LEXWARE_EINNAHMEN_SHEET_NAME.
+ */
+function importLexwareEinnahmen() {
+    var props = PropertiesService.getScriptProperties();
+    var sheetName = (props.getProperty("LEXWARE_EINNAHMEN_SHEET_NAME") || "Lexware_Einnahmen").trim();
+    return lexwareImportVouchersToSheet_("invoice", sheetName);
+}
+
+/**
+ * Imports expense vouchers (Ausgaben) into the "Lexware_Ausgaben" sheet.
+ * Uses GET /v1/vouchers?voucherType=purchaseinvoice.
+ * Override the sheet name with the script property LEXWARE_AUSGABEN_SHEET_NAME.
+ */
+function importLexwareAusgaben() {
+    var props = PropertiesService.getScriptProperties();
+    var sheetName = (props.getProperty("LEXWARE_AUSGABEN_SHEET_NAME") || "Lexware_Ausgaben").trim();
+    return lexwareImportVouchersToSheet_("purchaseinvoice", sheetName);
+}
+
+/**
+ * Imports all vouchers (Umsätze) into the "Lexware_Umsaetze" sheet.
+ * Uses GET /v1/vouchers without type filter.
+ * Override the sheet name with the script property LEXWARE_UMSAETZE_SHEET_NAME.
+ */
+function importLexwareUmsaetze() {
+    var props = PropertiesService.getScriptProperties();
+    var sheetName = (props.getProperty("LEXWARE_UMSAETZE_SHEET_NAME") || "Lexware_Umsaetze").trim();
+    return lexwareImportVouchersToSheet_(null, sheetName);
+}
+
+/**
+ * Runs all four Lexware imports:
+ *   1. importLexwareToSheet()   – outgoing invoices (Rechnungen)
+ *   2. importLexwareEinnahmen() – income vouchers (Einnahmen)
+ *   3. importLexwareAusgaben()  – expense vouchers (Ausgaben)
+ *   4. importLexwareUmsaetze()  – all vouchers (Umsätze)
+ */
+function importLexwareAll() {
+    importLexwareToSheet();
+    importLexwareEinnahmen();
+    importLexwareAusgaben();
+    importLexwareUmsaetze();
 }
