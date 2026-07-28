@@ -221,6 +221,14 @@ function doPost(e) {
             });
         }
 
+        if (action === "invoiceUploadToLexware") {
+            var invoiceResult = processLodgifyInvoiceUploadToLexware();
+            return jsonResponse_(200, {
+                ok: true,
+                result: invoiceResult
+            });
+        }
+
         return jsonResponse_(400, {
             ok: false,
             error: "Unknown action"

@@ -5,6 +5,7 @@ function runAll() {
     generateMonatswerte();
     importLodgifyEinnahmenToImport();
     importLexwareAll();
+    processLodgifyInvoiceUploadToLexware();
     Logger.log("✅ Alle Skripte erfolgreich ausgeführt");
   } catch (e) {
     Logger.log("❌ Abbruch wegen Fehler: " + e.message);
