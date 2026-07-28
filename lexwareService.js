@@ -73,18 +73,24 @@ function lexwareRequest(path, queryParams) {
 // ---- API calls ---------------------------------------------
 
 /**
- * Fetches a page of vouchers from GET /v1/vouchers.
- * @param {string|null} voucherType - e.g. "invoice", "purchaseinvoice", or null for all types.
+ * Fetches a page of voucher metadata from GET /v1/voucherlist.
+ *
+ * The /v1/vouchers endpoint is a single-voucher lookup (requires voucherNumber).
+ * /v1/voucherlist is the correct endpoint for paginated listing.
+ * Both voucherType and voucherStatus are required by the API.
+ *
+ * @param {string|null} voucherType - e.g. "invoice", "purchaseinvoice", or null/"any" for all types.
  * @param {number} page - 0-based page index.
- * @param {number} pageSize - items per page (max 100).
+ * @param {number} pageSize - items per page (max 250).
  */
-function lexwareGetVouchers_(voucherType, page, pageSize) {
+function lexwareGetVoucherlist_(voucherType, page, pageSize) {
     var params = {
+        voucherType: voucherType || "any",
+        voucherStatus: "any",
         page: page || 0,
         size: pageSize || 100
     };
-    if (voucherType) params.voucherType = voucherType;
-    return lexwareRequest("/vouchers", params);
+    return lexwareRequest("/voucherlist", params);
 }
 
 function lexwareHealthCheck() {
@@ -96,8 +102,7 @@ function lexwareHealthCheck() {
 /**
  * Fetches all Lexware invoices (outgoing, voucherType=invoice) and writes
  * them to the "Lexware" sheet (or the sheet configured via the
- * LEXWARE_SHEET_NAME script property). Uses the /v1/vouchers endpoint which
- * supersedes the removed /v1/invoices endpoint.
+ * LEXWARE_SHEET_NAME script property). Uses the /v1/voucherlist endpoint.
  */
 function importLexwareToSheet() {
     var config = getLexwareConfig();
@@ -157,17 +162,18 @@ function lexwareImportVouchersToSheet_(voucherType, sheetName) {
     var totalPages = 1;
 
     do {
-        var result = lexwareGetVouchers_(voucherType || null, page, pageSize);
+        var result = lexwareGetVoucherlist_(voucherType || null, page, pageSize);
         var body = result.body;
 
         if (!body || !body.content) {
-            Logger.log("Lexware vouchers: unexpected response on page " + page + ": " + JSON.stringify(body));
+            Logger.log("Lexware voucherlist: unexpected response on page " + page + ": " + JSON.stringify(body));
             break;
         }
 
         allVouchers = allVouchers.concat(body.content);
 
-        // The vouchers endpoint wraps pagination in a nested "page" object.
+        // The voucherlist endpoint returns pagination at the top level;
+        // some older endpoints wrap it in a nested "page" object.
         var pageInfo = body.page || {};
         totalPages = pageInfo.totalPages !== undefined ? pageInfo.totalPages
                    : (body.totalPages !== undefined ? body.totalPages : 1);
@@ -175,7 +181,7 @@ function lexwareImportVouchersToSheet_(voucherType, sheetName) {
     } while (page < totalPages);
 
     Logger.log(
-        "Lexware vouchers (" + (voucherType || "all") + "): fetched " +
+        "Lexware voucherlist (" + (voucherType || "all") + "): fetched " +
         allVouchers.length + " records across " + totalPages + " page(s)"
     );
 
@@ -216,7 +222,7 @@ function lexwareImportVouchersToSheet_(voucherType, sheetName) {
     }
 
     Logger.log(
-        "Lexware vouchers (" + (voucherType || "all") + ") import complete: " +
+        "Lexware voucherlist (" + (voucherType || "all") + ") import complete: " +
         "total=" + allVouchers.length +
         ", inserted=" + newRows.length +
         ", updated=" + updatedCount
@@ -233,7 +239,7 @@ function lexwareImportVouchersToSheet_(voucherType, sheetName) {
 
 /**
  * Imports income vouchers (Einnahmen) into the "Lexware_Einnahmen" sheet.
- * Uses GET /v1/vouchers?voucherType=invoice.
+ * Uses GET /v1/voucherlist?voucherType=invoice&voucherStatus=any.
  * Override the sheet name with the script property LEXWARE_EINNAHMEN_SHEET_NAME.
  */
 function importLexwareEinnahmen() {
@@ -244,7 +250,7 @@ function importLexwareEinnahmen() {
 
 /**
  * Imports expense vouchers (Ausgaben) into the "Lexware_Ausgaben" sheet.
- * Uses GET /v1/vouchers?voucherType=purchaseinvoice.
+ * Uses GET /v1/voucherlist?voucherType=purchaseinvoice&voucherStatus=any.
  * Override the sheet name with the script property LEXWARE_AUSGABEN_SHEET_NAME.
  */
 function importLexwareAusgaben() {
@@ -255,7 +261,7 @@ function importLexwareAusgaben() {
 
 /**
  * Imports all vouchers (Umsätze) into the "Lexware_Umsaetze" sheet.
- * Uses GET /v1/vouchers without type filter.
+ * Uses GET /v1/voucherlist?voucherType=any&voucherStatus=any.
  * Override the sheet name with the script property LEXWARE_UMSAETZE_SHEET_NAME.
  */
 function importLexwareUmsaetze() {
