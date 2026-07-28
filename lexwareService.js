@@ -106,7 +106,7 @@ function lexwareHealthCheck() {
  */
 function importLexwareToSheet() {
     var config = getLexwareConfig();
-    return lexwareImportVouchersToSheet_("invoice", config.sheetName);
+    return lexwareImportVouchersToSheet_("salesinvoice", config.sheetName);
 }
 
 // ---- Voucher import (Einnahmen / Ausgaben / Umsätze) -------
@@ -239,13 +239,13 @@ function lexwareImportVouchersToSheet_(voucherType, sheetName) {
 
 /**
  * Imports income vouchers (Einnahmen) into the "Lexware_Einnahmen" sheet.
- * Uses GET /v1/voucherlist?voucherType=invoice&voucherStatus=any.
+ * Uses GET /v1/voucherlist?voucherType=salesinvoice&voucherStatus=any.
  * Override the sheet name with the script property LEXWARE_EINNAHMEN_SHEET_NAME.
  */
 function importLexwareEinnahmen() {
     var props = PropertiesService.getScriptProperties();
     var sheetName = (props.getProperty("LEXWARE_EINNAHMEN_SHEET_NAME") || "Lexware_Einnahmen").trim();
-    return lexwareImportVouchersToSheet_("invoice", sheetName);
+    return lexwareImportVouchersToSheet_("salesinvoice", sheetName);
 }
 
 /**
