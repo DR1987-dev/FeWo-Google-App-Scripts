@@ -410,7 +410,8 @@ function importLexwareUmsaetze() {
  * Returns { ok: true, fileId: string, body: object }.
  *
  * @param {Blob}   blob      The file blob to upload.
- * @param {string} fileName  The file name to use (e.g. "Rechnung_123.pdf").
+ * @param {string} fileName  The file name to use for the upload (e.g. "Rechnung_123.pdf").
+ *                           Falls back to the blob's existing name when omitted.
  */
 function lexwareUploadFile_(blob, fileName) {
     var config = validateLexwareConfig();

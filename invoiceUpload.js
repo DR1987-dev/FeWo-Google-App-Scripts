@@ -277,7 +277,7 @@ function processLodgifyInvoiceUploadToLexware() {
         try {
             var blob = getLodgifyInvoicePdf_(bookingId, config.invoicePathTemplate);
             var fileName = "Lodgify_Invoice_" + bookingId + ".pdf";
-            blob.setName(fileName);
+            // Normalise content type before upload; lexwareUploadFile_ will set the name.
             if (!blob.getContentType() || blob.getContentType() === "application/octet-stream") {
                 blob.setContentType("application/pdf");
             }
@@ -287,7 +287,8 @@ function processLodgifyInvoiceUploadToLexware() {
                 new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss"
             );
 
-            var sheetRow = i + 1; // 1-based, row 1 is the header
+            // i=1 is the first data row → sheet row 2 (row 1 = header)
+            var sheetRow = i + 1;
             sheet.getRange(sheetRow, cols.uploadedIdx + 1).setValue(timestamp);
             sheet.getRange(sheetRow, cols.fileIdIdx + 1).setValue(uploadResult.fileId || "");
 
