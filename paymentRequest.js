@@ -941,6 +941,9 @@ function replaceMessageTemplatePlaceholders_(template, bookingId) {
 }
 
 const DEFAULT_LODGIFY_GUEST_MESSAGE_SUBJECT_ = "Ihre Buchung #{bookingId} | Zahlungsanweisung";
+// Lodgify requires owner message type and notification flag on create-message requests.
+const LODGIFY_OWNER_MESSAGE_TYPE_ = "Owner";
+const LODGIFY_SEND_NOTIFICATION_ = true;
 
 function buildLodgifyMessageSubject_(subjectTemplate, bookingId) {
     const normalizedTemplate = String(subjectTemplate || "").trim();
@@ -961,7 +964,10 @@ function sendLodgifyBookingMessage_(bookingId, messageText) {
     const customPath = String(props.getProperty("LODGIFY_GUEST_MESSAGE_PATH") || "").trim();
     const subjectTemplate = String(props.getProperty("LODGIFY_GUEST_MESSAGE_SUBJECT_TEMPLATE") || "").trim();
     const configuredMessageType = String(props.getProperty("LODGIFY_GUEST_MESSAGE_TYPE") || "").trim();
-    const messageType = configuredMessageType || "Owner";
+    const messageType = LODGIFY_OWNER_MESSAGE_TYPE_;
+    if (configuredMessageType && !/^owner$/i.test(configuredMessageType)) {
+        Logger.log("⚠️ LODGIFY_GUEST_MESSAGE_TYPE supports only 'Owner'; using Owner.");
+    }
     const encodedId = encodeURIComponent(bookingId);
     const messageSubject = buildLodgifyMessageSubject_(subjectTemplate, bookingId);
     const messageHtml = toSafeHtmlWithLineBreaks_(messageText);
@@ -980,23 +986,19 @@ function sendLodgifyBookingMessage_(bookingId, messageText) {
     const payloadCandidates = [
         {
             // Lodgify v1 /reservation/booking/{id}/messages expects an array payload.
-            payload: [{ subject: messageSubject, type: messageType, message: messageHtml }],
+            payload: [{ subject: messageSubject, type: messageType, send_notification: LODGIFY_SEND_NOTIFICATION_, message: messageHtml }],
             contentType: "application/json-patch+json"
         },
         {
-            payload: [{ subject: messageSubject, type: messageType, body: messageHtml }],
+            payload: [{ subject: messageSubject, type: messageType, send_notification: LODGIFY_SEND_NOTIFICATION_, body: messageHtml }],
             contentType: "application/json-patch+json"
         },
         {
-            payload: { message: messageText },
+            payload: { type: messageType, send_notification: LODGIFY_SEND_NOTIFICATION_, message: messageText },
             contentType: "application/json"
         },
         {
-            payload: { body: messageText },
-            contentType: "application/json"
-        },
-        {
-            payload: { content: messageText, type: "message" },
+            payload: { type: messageType, send_notification: LODGIFY_SEND_NOTIFICATION_, body: messageText },
             contentType: "application/json"
         }
     ];
