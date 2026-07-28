@@ -403,6 +403,58 @@ function importLexwareUmsaetze() {
     return lexwareImportVouchersToSheet_(null, sheetName);
 }
 
+// ---- File upload -------------------------------------------
+
+/**
+ * Uploads a Blob as a file to Lexware Office via POST /v1/files-api/files.
+ * Returns { ok: true, fileId: string, body: object }.
+ *
+ * @param {Blob}   blob      The file blob to upload.
+ * @param {string} fileName  The file name to use for the upload (e.g. "Rechnung_123.pdf").
+ *                           Falls back to the blob's existing name when omitted.
+ */
+function lexwareUploadFile_(blob, fileName) {
+    var config = validateLexwareConfig();
+    var url = LEXWARE_BASE_URL + "/files-api/files";
+
+    var namedBlob = blob.setName(fileName || blob.getName() || "upload.pdf");
+
+    var options = {
+        method: "post",
+        payload: { file: namedBlob },
+        muteHttpExceptions: true,
+        headers: {
+            "Authorization": "Bearer " + config.apiKey,
+            "Accept": "application/json"
+        }
+    };
+
+    var response = UrlFetchApp.fetch(url, options);
+    var status = response.getResponseCode();
+    var bodyText = response.getContentText() || "";
+
+    var body;
+    try {
+        body = bodyText ? JSON.parse(bodyText) : null;
+    } catch (e) {
+        body = bodyText;
+    }
+
+    if (status < 200 || status >= 300) {
+        throw new Error("Lexware file upload failed (" + status + ") for " + url + ": " + bodyText);
+    }
+
+    var fileId = String(
+        (body && (body.id || body.fileId || body.file_id || body.uuid)) || ""
+    );
+
+    Logger.log("Lexware file upload: status=" + status + ", fileId=" + fileId);
+
+    return { ok: true, status: status, fileId: fileId, body: body };
+}
+
+// ---- All imports -------------------------------------------
+
 /**
  * Runs all four Lexware imports:
  *   1. importLexwareToSheet()   – outgoing invoices (Rechnungen)
