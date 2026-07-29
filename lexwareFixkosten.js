@@ -261,6 +261,26 @@ function formatDate_(d) {
     return y + "-" + m + "-" + day;
 }
 
+function buildFixkostenVoucherNumber_(params) {
+    var datePart = String(params.voucherDate || "").replace(/[^0-9]/g, "");
+    var supplierPart = String(params.lieferantennummer || "")
+        .replace(/[^A-Za-z0-9]/g, "")
+        .toUpperCase();
+    var categoryPart = String(params.kategorieName || "")
+        .replace(/[^A-Za-z0-9]/g, "")
+        .toUpperCase();
+    var amountPart = String(Math.round((Number(params.betragBrutto) || 0) * 100));
+
+    var voucherNumber = [
+        "FK",
+        datePart || "DATE",
+        supplierPart || categoryPart || "NA",
+        amountPart || "0"
+    ].join("-");
+
+    return voucherNumber.slice(0, 60);
+}
+
 // ---- Lexware contact lookup --------------------------------
 
 /**
@@ -376,6 +396,7 @@ function findLexwarePostingCategoryId_(categoryName) {
  *
  * @param {Object} params
  * @param {string} params.contactId    Lexware-UUID des Lieferanten
+ * @param {string} params.lieferantennummer  Lieferantennummer (für Belegnummer-Generierung)
  * @param {string} params.voucherDate  Belegdatum (JJJJ-MM-TT)
  * @param {string} params.dueDate      Fälligkeitsdatum (JJJJ-MM-TT)
  * @param {string} params.kategorieName  Buchungskategoriename (z. B. "Reise MA"), nur für Logging
@@ -390,6 +411,7 @@ function createLexwarePurchaseInvoice_(params) {
     var taxRatePercent = Number(params.mwstSatz) || 0;
     var grossAmount = round2(Number(params.betragBrutto) || 0);
     var taxAmount = round2(grossAmount - grossAmount / (1 + taxRatePercent / 100));
+    var voucherNumber = buildFixkostenVoucherNumber_(params);
 
     // Build remark: include IBAN of debit account if provided
     var remark = params.notiz ? String(params.notiz).trim() : "";
@@ -415,6 +437,7 @@ function createLexwarePurchaseInvoice_(params) {
 
     var payload = {
         type: "purchaseinvoice",
+        voucherNumber: voucherNumber,
         voucherDate: params.voucherDate,
         dueDate: params.dueDate,
         totalGrossAmount: grossAmount,
@@ -586,6 +609,7 @@ function createLexwareFixkosten() {
                 voucherDate: dueInfo.voucherDate,
                 dueDate:     dueInfo.dueDate,
                 kategorieName: kategorieName,
+                lieferantennummer: lieferantennummer,
                 categoryId:  categoryId,
                 betragBrutto: betragBrutto,
                 mwstSatz:    mwstSatz,
