@@ -67,6 +67,59 @@ var FK_COL = {
     LEXWARE_BELEG_ID:   13
 };
 
+// ---- Dynamic column helpers --------------------------------
+
+/**
+ * Liest die erste Zeile des Blattes und baut eine Map
+ * { "Spaltenname": 0-basierter-Index }.
+ * Spalten ohne Beschriftung werden ignoriert.
+ *
+ * @param  {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @return {Object}  Mapping Spaltenname → 0-basierter Index
+ */
+function buildColMap_(sheet) {
+    var lastCol = Math.max(sheet.getLastColumn(), 1);
+    var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+    var map = {};
+    for (var i = 0; i < headers.length; i++) {
+        var name = String(headers[i] || "").trim();
+        if (name) map[name] = i;
+    }
+    return map;
+}
+
+/**
+ * Liest einen Wert aus einer Datenzeile anhand des Header-Namens.
+ * Versucht zuerst `primary`, dann `fallback`.
+ * Gibt undefined zurück, wenn keine passende Spalte gefunden wurde.
+ *
+ * @param  {Array}  row
+ * @param  {Object} colMap   Ergebnis von buildColMap_
+ * @param  {string} primary  Bevorzugter Spaltenname
+ * @param  {string} [fallback] Alternativer Spaltenname
+ * @return {*}
+ */
+function readCell_(row, colMap, primary, fallback) {
+    if (Object.prototype.hasOwnProperty.call(colMap, primary)) return row[colMap[primary]];
+    if (fallback && Object.prototype.hasOwnProperty.call(colMap, fallback)) return row[colMap[fallback]];
+    return undefined;
+}
+
+/**
+ * Liefert den 1-basierten Spaltenindex für sheet.getRange(row, col).
+ * Versucht zuerst `primary`, dann `fallback`; gibt -1 zurück wenn nicht gefunden.
+ *
+ * @param  {Object} colMap
+ * @param  {string} primary
+ * @param  {string} [fallback]
+ * @return {number}  1-basierter Index oder -1
+ */
+function writeCol_(colMap, primary, fallback) {
+    if (Object.prototype.hasOwnProperty.call(colMap, primary)) return colMap[primary] + 1;
+    if (fallback && Object.prototype.hasOwnProperty.call(colMap, fallback)) return colMap[fallback] + 1;
+    return -1;
+}
+
 // ---- Config ------------------------------------------------
 
 function getFixkostenSheetName_() {
@@ -140,6 +193,12 @@ function isFixkostenDue_(rhythmus, faelligkeitstag, faelligkeitsmonat, zuletztGe
     var billingMonth; // 0-based month index for the voucher date
 
     var r = String(rhythmus || "").toLowerCase().trim();
+
+    // Normalize common short / alternate spellings
+    if (r === "monat")                                          r = "monatlich";
+    if (r === "quartal" || r === "vierteljährlich"
+            || r === "vierteljaehrlich")                        r = "quartalsweise";
+    if (r === "jahr" || r === "jährlich" || r === "jaehrlich") r = "jährlich";
 
     if (r === "monatlich") {
         // Current period: 1st to last day of current month
@@ -374,13 +433,22 @@ function createLexwareFixkosten() {
         return { ok: true, created: 0, skipped: 0, errors: 0 };
     }
 
-    var numCols = FIXKOSTEN_HEADERS.length;
+    // Build dynamic column map from actual sheet headers (row 1).
+    // This makes the script robust against different column orders and
+    // against sheets that were created without the "Lieferantennummer" column.
+    var colMap = buildColMap_(sheet);
+
+    var numCols = sheet.getLastColumn();
     var data = sheet.getRange(2, 1, lastRow - 1, numCols).getValues();
     var now = new Date();
 
     var created = 0;
     var skipped = 0;
     var errors  = 0;
+
+    // Pre-compute write-back column indices (1-based)
+    var zuletztGebuchtCol = writeCol_(colMap, "Zuletzt_Gebucht");
+    var lexwareBelegIdCol = writeCol_(colMap, "Lexware_Beleg_ID", "Lexware_Beleg_I");
 
     // Cache contact IDs to avoid repeated API calls for same supplier
     var contactCache = {};
@@ -389,18 +457,19 @@ function createLexwareFixkosten() {
         var row = data[i];
         var rowNum = i + 2; // 1-based sheet row
 
-        var kategorieNr        = String(row[FK_COL.KATEGORIE_NR - 1]        || "").trim();
-        var lieferant          = String(row[FK_COL.LIEFERANT - 1]          || "").trim();
-        var lieferantennummer  = String(row[FK_COL.LIEFERANTENNUMMER - 1]  || "").trim();
-        var betragBrutto       = Number(row[FK_COL.BETRAG_BRUTTO - 1])     || 0;
-        var mwstSatz           = Number(row[FK_COL.MWST_SATZ - 1])         || 0;
-        var rhythmus           = String(row[FK_COL.RHYTHMUS - 1]           || "").trim();
-        var faelligkeitstag    = row[FK_COL.FAELLIGKEITSTAG - 1];
-        var faelligkeitsmonat  = row[FK_COL.FAELLIGKEITSMONAT - 1];
-        var kontoIban          = String(row[FK_COL.KONTO_IBAN - 1]         || "").trim();
-        var aktiv              = row[FK_COL.AKTIV - 1];
-        var notiz              = String(row[FK_COL.NOTIZ - 1]              || "").trim();
-        var zuletztGebucht     = String(row[FK_COL.ZULETZT_GEBUCHT - 1]    || "").trim();
+        var kategorieNr        = String(readCell_(row, colMap, "Kategorie_Nr")                          || "").trim();
+        var lieferant          = String(readCell_(row, colMap, "Lieferant")                             || "").trim();
+        // Fall back to "Lieferant" when a dedicated "Lieferantennummer" column is absent
+        var lieferantennummer  = String(readCell_(row, colMap, "Lieferantennummer", "Lieferant")        || "").trim();
+        var betragBrutto       = Number(readCell_(row, colMap, "Betrag_Brutto"))                        || 0;
+        var mwstSatz           = Number(readCell_(row, colMap, "MwSt_Satz"))                            || 0;
+        var rhythmus           = String(readCell_(row, colMap, "Rhythmus")                              || "").trim();
+        var faelligkeitstag    = readCell_(row, colMap, "Fälligkeitstag");
+        var faelligkeitsmonat  = readCell_(row, colMap, "Fälligkeitsmonat");
+        var kontoIban          = String(readCell_(row, colMap, "Konto_IBAN")                            || "").trim();
+        var aktiv              = readCell_(row, colMap, "Aktiv");
+        var notiz              = String(readCell_(row, colMap, "Notiz")                                 || "").trim();
+        var zuletztGebucht     = String(readCell_(row, colMap, "Zuletzt_Gebucht")                       || "").trim();
 
         // Skip empty or inactive rows
         if (!kategorieNr && !lieferantennummer) { skipped++; continue; }
@@ -463,8 +532,12 @@ function createLexwareFixkosten() {
             });
 
             // Write back booking date and voucher ID
-            sheet.getRange(rowNum, FK_COL.ZULETZT_GEBUCHT).setValue(formatDate_(now));
-            sheet.getRange(rowNum, FK_COL.LEXWARE_BELEG_ID).setValue(voucherId);
+            if (zuletztGebuchtCol > 0) {
+                sheet.getRange(rowNum, zuletztGebuchtCol).setValue(formatDate_(now));
+            }
+            if (lexwareBelegIdCol > 0) {
+                sheet.getRange(rowNum, lexwareBelegIdCol).setValue(voucherId);
+            }
 
             Logger.log(
                 "Fixkosten: ✅ Zeile " + rowNum + " (Kat. " + kategorieNr + ")" +
