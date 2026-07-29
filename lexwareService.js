@@ -80,6 +80,7 @@ function lexwareRequest(path, queryParams, baseUrl) {
 function isLexwareStatusError_(error, statusCode) {
     return !!error &&
         error.name === "LexwareRequestError" &&
+        error.statusCode !== undefined &&
         error.statusCode === statusCode;
 }
 
@@ -372,8 +373,14 @@ function buildBankTransactionParams_(page, pageSize, bankAccountId, sizeKey) {
     return params;
 }
 
-// Lexware may return bank transactions as a top-level array or wrap them
-// in "content" / "bankTransactions", depending on the endpoint variant.
+/**
+ * Normalizes bank transaction payloads from Lexware endpoint variants.
+ * Some responses return a top-level array, while others wrap records in
+ * "content" or "bankTransactions".
+ *
+ * @param {*} body
+ * @return {Array}
+ */
 function extractLexwareBankTransactionContent_(body) {
     if (Array.isArray(body)) {
         return body;
