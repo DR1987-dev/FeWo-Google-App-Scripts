@@ -10,7 +10,7 @@
 // Erforderliche Spalten im Blatt "Lexware Fixkosten"
 // (Reihenfolge muss exakt eingehalten werden):
 //
-//  Spalte A  Bezeichnung        – Freitext, z. B. "Strom Q1"
+//  Spalte A  Kategorie_Nr       – Buchungskategorie-Nummer aus Lexware (bookingKey, z. B. 4300)
 //  Spalte B  Lieferant          – Anzeigename (nur zur Übersicht, kein API-Lookup)
 //  Spalte C  Lieferantennummer  – Kundennummer des Lieferanten in Lexware (contactNumber)
 //  Spalte D  Betrag_Brutto      – Bruttobetrag in EUR (Zahl, z. B. 142.80)
@@ -30,7 +30,7 @@
 var FIXKOSTEN_DEFAULT_SHEET_NAME = "Lexware Fixkosten";
 
 var FIXKOSTEN_HEADERS = [
-    "Bezeichnung",        // A  1
+    "Kategorie_Nr",       // A  1  (bookingKey in Lexware, z. B. 4300)
     "Lieferant",          // B  2  (Anzeigename, kein API-Lookup)
     "Lieferantennummer",  // C  3  (contactNumber in Lexware – eindeutig)
     "Betrag_Brutto",      // D  4
@@ -46,7 +46,7 @@ var FIXKOSTEN_HEADERS = [
 
 // Column indices (1-based for sheet operations)
 var FK_COL = {
-    BEZEICHNUNG:       1,
+    KATEGORIE_NR:      1,
     LIEFERANT:         2,
     LIEFERANTENNUMMER: 3,
     BETRAG_BRUTTO:     4,
@@ -240,7 +240,7 @@ function findLexwareContactIdByNumber_(contactNumber) {
  * @param {string} params.contactId    Lexware-UUID des Lieferanten
  * @param {string} params.voucherDate  Belegdatum (JJJJ-MM-TT)
  * @param {string} params.dueDate      Fälligkeitsdatum (JJJJ-MM-TT)
- * @param {string} params.bezeichnung  Positionstext
+ * @param {string} params.kategorieNr  Lexware-Buchungskategorie-Nummer (bookingKey, z. B. "4300")
  * @param {number} params.betragBrutto  Bruttobetrag
  * @param {number} params.mwstSatz     Mehrwertsteuersatz in % (0, 7 oder 19)
  * @param {string} params.konto_iban   IBAN des abbuchenden Kontos (optional, in Notiz)
@@ -259,19 +259,13 @@ function createLexwarePurchaseInvoice_(params) {
         remark = remark ? remark + " | " + ibanNote : ibanNote;
     }
 
-    var payload = {
-        type: "purchaseinvoice",
-        voucherDate: params.voucherDate,
-        dueDate: params.dueDate,
-        voucherStatus: "open",
-        // Lexware Office API expects the contact nested under a "contact" object.
-        // The flat "contactId" field is kept for older/alternative API versions.
-        contact: { contactId: params.contactId },
-        contactId: params.contactId,
-        lineItems: [
-            {
+    // Line item name: use notiz as display text, otherwise fall back to category number or generic label
+    var lineItemName = (params.notiz && String(params.notiz).trim())
+        || (params.kategorieNr ? "Kategorie " + params.kategorieNr : "Fixkosten");
+
+    var lineItem = {
                 type: "custom",
-                name: String(params.bezeichnung).trim(),
+                name: lineItemName,
                 quantity: 1,
                 unitName: "Pauschal",
                 unitPrice: {
@@ -281,8 +275,23 @@ function createLexwarePurchaseInvoice_(params) {
                     taxRatePercentage: taxRatePercentage
                 },
                 lineItemAmount: grossAmount
-            }
-        ]
+            };
+
+    var bookingKeyNum = parseInt(params.kategorieNr, 10);
+    if (!isNaN(bookingKeyNum) && bookingKeyNum > 0) {
+        lineItem.bookingKey = bookingKeyNum;
+    }
+
+    var payload = {
+        type: "purchaseinvoice",
+        voucherDate: params.voucherDate,
+        dueDate: params.dueDate,
+        voucherStatus: "open",
+        // Lexware Office API expects the contact nested under a "contact" object.
+        // The flat "contactId" field is kept for older/alternative API versions.
+        contact: { contactId: params.contactId },
+        contactId: params.contactId,
+        lineItems: [ lineItem ]
     };
 
     if (remark) {
@@ -297,7 +306,7 @@ function createLexwarePurchaseInvoice_(params) {
     );
 
     Logger.log(
-        "Fixkosten: Beleg erstellt – " + params.bezeichnung +
+        "Fixkosten: Beleg erstellt – Kategorie " + params.kategorieNr +
         ", Brutto=" + grossAmount +
         ", Netto=" + netAmount +
         ", MwSt=" + taxRatePercentage + "%" +
@@ -352,7 +361,7 @@ function createLexwareFixkosten() {
         var row = data[i];
         var rowNum = i + 2; // 1-based sheet row
 
-        var bezeichnung       = String(row[FK_COL.BEZEICHNUNG - 1]       || "").trim();
+        var kategorieNr       = String(row[FK_COL.KATEGORIE_NR - 1]       || "").trim();
         var lieferant         = String(row[FK_COL.LIEFERANT - 1]         || "").trim();
         var lieferantennummer = String(row[FK_COL.LIEFERANTENNUMMER - 1] || "").trim();
         var betragBrutto      = Number(row[FK_COL.BETRAG_BRUTTO - 1])    || 0;
@@ -365,9 +374,9 @@ function createLexwareFixkosten() {
         var zuletztGebucht    = String(row[FK_COL.ZULETZT_GEBUCHT - 1]   || "").trim();
 
         // Skip empty or inactive rows
-        if (!bezeichnung && !lieferantennummer) { skipped++; continue; }
+        if (!kategorieNr && !lieferantennummer) { skipped++; continue; }
         if (aktiv === false || String(aktiv).toUpperCase() === "FALSE" || aktiv === 0) {
-            Logger.log("Fixkosten: Zeile " + rowNum + " (" + bezeichnung + ") – inaktiv, übersprungen.");
+            Logger.log("Fixkosten: Zeile " + rowNum + " (Kat. " + kategorieNr + ") – inaktiv, übersprungen.");
             skipped++;
             continue;
         }
@@ -375,14 +384,14 @@ function createLexwareFixkosten() {
         // Validate required fields
         if (!lieferantennummer) {
             Logger.log(
-                "Fixkosten: Zeile " + rowNum + " (" + bezeichnung + ")" +
+                "Fixkosten: Zeile " + rowNum + " (Kat. " + kategorieNr + ")" +
                 " – Lieferantennummer fehlt, übersprungen."
             );
             skipped++;
             continue;
         }
         if (!betragBrutto || betragBrutto <= 0) {
-            Logger.log("Fixkosten: Zeile " + rowNum + " (" + bezeichnung + ") – Betrag fehlt oder 0, übersprungen.");
+            Logger.log("Fixkosten: Zeile " + rowNum + " (Kat. " + kategorieNr + ") – Betrag fehlt oder 0, übersprungen.");
             skipped++;
             continue;
         }
@@ -390,7 +399,7 @@ function createLexwareFixkosten() {
         // Check due date
         var dueInfo = isFixkostenDue_(rhythmus, faelligkeitstag, zuletztGebucht, now);
         if (!dueInfo) {
-            Logger.log("Fixkosten: Zeile " + rowNum + " (" + bezeichnung + ") – noch nicht fällig.");
+            Logger.log("Fixkosten: Zeile " + rowNum + " (Kat. " + kategorieNr + ") – noch nicht fällig.");
             skipped++;
             continue;
         }
@@ -403,7 +412,7 @@ function createLexwareFixkosten() {
         }
         if (!contactId) {
             Logger.log(
-                "Fixkosten: Zeile " + rowNum + " (" + bezeichnung + ")" +
+                "Fixkosten: Zeile " + rowNum + " (Kat. " + kategorieNr + ")" +
                 " – Lieferantennummer '" + lieferantennummer +
                 "' (" + (lieferant || "?") + ") nicht in Lexware gefunden, übersprungen."
             );
@@ -417,7 +426,7 @@ function createLexwareFixkosten() {
                 contactId:   contactId,
                 voucherDate: dueInfo.voucherDate,
                 dueDate:     dueInfo.dueDate,
-                bezeichnung: bezeichnung,
+                kategorieNr: kategorieNr,
                 betragBrutto: betragBrutto,
                 mwstSatz:    mwstSatz,
                 konto_iban:  kontoIban,
@@ -429,13 +438,13 @@ function createLexwareFixkosten() {
             sheet.getRange(rowNum, FK_COL.LEXWARE_BELEG_ID).setValue(voucherId);
 
             Logger.log(
-                "Fixkosten: ✅ Zeile " + rowNum + " (" + bezeichnung + ")" +
+                "Fixkosten: ✅ Zeile " + rowNum + " (Kat. " + kategorieNr + ")" +
                 " – Beleg erstellt: " + voucherId
             );
             created++;
         } catch (e) {
             Logger.log(
-                "Fixkosten: ❌ Zeile " + rowNum + " (" + bezeichnung + ")" +
+                "Fixkosten: ❌ Zeile " + rowNum + " (Kat. " + kategorieNr + ")" +
                 " – Fehler beim Erstellen: " + e.message
             );
             errors++;
