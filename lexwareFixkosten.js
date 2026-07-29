@@ -10,7 +10,7 @@
 // Erforderliche Spalten im Blatt "Lexware Fixkosten"
 // (Reihenfolge muss exakt eingehalten werden):
 //
-//  Spalte A  Kategorie_Nr       – Buchungskategorie-Nummer aus Lexware (bookingKey, z. B. 4300)
+//  Spalte A  Kategorie          – Buchungskategoriename aus Lexware (name, z. B. "Reise MA")
 //  Spalte B  Lieferant          – Anzeigename (nur zur Übersicht, kein API-Lookup)
 //  Spalte C  Lieferantennummer  – Kundennummer des Lieferanten in Lexware (contactNumber)
 //  Spalte D  Betrag_Brutto      – Bruttobetrag in EUR (Zahl, z. B. 142.80)
@@ -35,7 +35,7 @@
 var FIXKOSTEN_DEFAULT_SHEET_NAME = "Lexware Fixkosten";
 
 var FIXKOSTEN_HEADERS = [
-    "Kategorie_Nr",       // A  1  (bookingKey in Lexware, z. B. 4300)
+    "Kategorie",          // A  1  (name in Lexware, z. B. "Reise MA")
     "Lieferant",          // B  2  (Anzeigename, kein API-Lookup)
     "Lieferantennummer",  // C  3  (contactNumber in Lexware – eindeutig)
     "Betrag_Brutto",      // D  4
@@ -52,7 +52,7 @@ var FIXKOSTEN_HEADERS = [
 
 // Column indices (1-based for sheet operations)
 var FK_COL = {
-    KATEGORIE_NR:       1,
+    KATEGORIE:          1,
     LIEFERANT:          2,
     LIEFERANTENNUMMER:  3,
     BETRAG_BRUTTO:      4,
@@ -264,20 +264,21 @@ function formatDate_(d) {
 // ---- Lexware contact lookup --------------------------------
 
 /**
- * Sucht einen Kontakt in Lexware anhand seiner Lieferantennummer (contactNumber).
- * Diese Nummer ist in Lexware eindeutig und vermeidet Verwechslungen bei
- * gleichlautenden Lieferantennamen.
+ * Sucht einen Kontakt in Lexware anhand seiner Lieferantennummer (vendorNumber).
+ * Lexware speichert Lieferantennummern im Vendor-Role-Objekt des Kontakts
+ * (roles.vendor.vendorNumber). Der Endpunkt unterstützt die Filterung per
+ * vendorNumber-Abfrageparameter.
  *
- * @param  {string} contactNumber  Lieferantennummer aus Lexware (z. B. "L-1042")
- * @return {string|null}           Lexware-UUID des Kontakts oder null
+ * @param  {string} vendorNumber  Lieferantennummer aus Lexware (z. B. "70009")
+ * @return {string|null}          Lexware-UUID des Kontakts oder null
  */
-function findLexwareContactIdByNumber_(contactNumber) {
-    if (!contactNumber) return null;
-    var numberTrimmed = String(contactNumber).trim();
+function findLexwareContactIdByNumber_(vendorNumber) {
+    if (!vendorNumber) return null;
+    var numberTrimmed = String(vendorNumber).trim();
 
     var result;
     try {
-        result = lexwareRequest("/contacts", { contactNumber: numberTrimmed });
+        result = lexwareRequest("/contacts", { vendorNumber: numberTrimmed });
     } catch (e) {
         Logger.log("Fixkosten: Kontaktsuche fehlgeschlagen für Nummer '" + numberTrimmed + "': " + e.message);
         return null;
@@ -296,16 +297,24 @@ function findLexwareContactIdByNumber_(contactNumber) {
         contacts = [body];
     }
 
-    // Look for exact contactNumber match
+    // Look for exact match in all known vendor-number fields
     for (var i = 0; i < contacts.length; i++) {
         var c = contacts[i];
-        var cNum = String(c.contactNumber || c.number || c.customerNumber || "").trim();
+        var cNum = String(
+            c.vendorNumber || c.contactNumber || c.number || c.customerNumber || ""
+        ).trim();
+        // Also check the nested vendor role (Lexware contacts API)
+        if (!cNum && c.roles && c.roles.vendor) {
+            cNum = String(
+                c.roles.vendor.vendorNumber || c.roles.vendor.number || ""
+            ).trim();
+        }
         if (cNum === numberTrimmed) {
             return String(c.id);
         }
     }
 
-    // If the API returned exactly one result, accept it (some APIs filter server-side)
+    // If the API returned exactly one result, accept it (server-side filtering)
     if (contacts.length === 1) {
         Logger.log(
             "Fixkosten: Kontakt für Nummer '" + numberTrimmed +
@@ -318,6 +327,48 @@ function findLexwareContactIdByNumber_(contactNumber) {
     return null;
 }
 
+/**
+ * Sucht eine Buchungskategorie in Lexware anhand ihres Namens.
+ * Ruft GET /v1/posting-categories auf und gibt die UUID der passenden
+ * Kategorie zurück.
+ *
+ * @param  {string} categoryName  Name der Buchungskategorie (z. B. "Reise MA")
+ * @return {string|null}          Lexware-UUID der Kategorie oder null
+ */
+function findLexwarePostingCategoryId_(categoryName) {
+    if (!categoryName) return null;
+    var nameStr = String(categoryName).trim();
+
+    var result;
+    try {
+        result = lexwareRequest("/posting-categories");
+    } catch (e) {
+        Logger.log("Fixkosten: Buchungskategorie-Suche fehlgeschlagen für '" + nameStr + "': " + e.message);
+        return null;
+    }
+
+    var body = result.body;
+    var categories = [];
+
+    if (Array.isArray(body)) {
+        categories = body;
+    } else if (body && Array.isArray(body.content)) {
+        categories = body.content;
+    } else if (body && Array.isArray(body.categories)) {
+        categories = body.categories;
+    }
+
+    for (var i = 0; i < categories.length; i++) {
+        var cat = categories[i];
+        if (String(cat.name || "").trim() === nameStr) {
+            return String(cat.id);
+        }
+    }
+
+    Logger.log("Fixkosten: Keine Buchungskategorie für Name '" + nameStr + "' gefunden.");
+    return null;
+}
+
 // ---- Voucher creation --------------------------------------
 
 /**
@@ -327,7 +378,8 @@ function findLexwareContactIdByNumber_(contactNumber) {
  * @param {string} params.contactId    Lexware-UUID des Lieferanten
  * @param {string} params.voucherDate  Belegdatum (JJJJ-MM-TT)
  * @param {string} params.dueDate      Fälligkeitsdatum (JJJJ-MM-TT)
- * @param {string} params.kategorieNr  Lexware-Buchungskategorie-Nummer (bookingKey, z. B. "4300")
+ * @param {string} params.kategorieName  Buchungskategoriename (z. B. "Reise MA"), nur für Logging
+ * @param {string} params.categoryId   Lexware-UUID der Buchungskategorie (aus /posting-categories)
  * @param {number} params.betragBrutto  Bruttobetrag
  * @param {number} params.mwstSatz     Mehrwertsteuersatz in % (0, 7 oder 19)
  * @param {string} params.konto_iban   IBAN des abbuchenden Kontos (optional, in Notiz)
@@ -335,9 +387,9 @@ function findLexwareContactIdByNumber_(contactNumber) {
  * @return {string}  Lexware-UUID des erstellten Belegs
  */
 function createLexwarePurchaseInvoice_(params) {
-    var taxRatePercentage = Number(params.mwstSatz) || 0;
+    var taxRatePercent = Number(params.mwstSatz) || 0;
     var grossAmount = round2(Number(params.betragBrutto) || 0);
-    var netAmount = round2(grossAmount / (1 + taxRatePercentage / 100));
+    var taxAmount = round2(grossAmount - grossAmount / (1 + taxRatePercent / 100));
 
     // Build remark: include IBAN of debit account if provided
     var remark = params.notiz ? String(params.notiz).trim() : "";
@@ -346,39 +398,30 @@ function createLexwarePurchaseInvoice_(params) {
         remark = remark ? remark + " | " + ibanNote : ibanNote;
     }
 
-    // Line item name: use notiz as display text, otherwise fall back to category number or generic label
-    var lineItemName = (params.notiz && String(params.notiz).trim())
-        || (params.kategorieNr ? "Kategorie " + params.kategorieNr : "Fixkosten");
+    // Voucher item as required by the Lexware POST /v1/vouchers API:
+    //   amount          – gross amount of the line item
+    //   taxAmount       – tax portion of amount
+    //   taxRatePercent  – tax rate in %
+    //   categoryId      – UUID from GET /v1/posting-categories
+    var voucherItem = {
+        amount: grossAmount,
+        taxAmount: taxAmount,
+        taxRatePercent: taxRatePercent
+    };
 
-    var lineItem = {
-                type: "custom",
-                name: lineItemName,
-                quantity: 1,
-                unitName: "Pauschal",
-                unitPrice: {
-                    currency: "EUR",
-                    netAmount: netAmount,
-                    grossAmount: grossAmount,
-                    taxRatePercentage: taxRatePercentage
-                },
-                lineItemAmount: grossAmount
-            };
-
-    var bookingKeyNum = parseInt(params.kategorieNr, 10);
-    if (!isNaN(bookingKeyNum) && bookingKeyNum > 0) {
-        lineItem.bookingKey = bookingKeyNum;
+    if (params.categoryId) {
+        voucherItem.categoryId = params.categoryId;
     }
 
     var payload = {
         type: "purchaseinvoice",
         voucherDate: params.voucherDate,
         dueDate: params.dueDate,
-        voucherStatus: "open",
-        // Lexware Office API expects the contact nested under a "contact" object.
-        // The flat "contactId" field is kept for older/alternative API versions.
-        contact: { contactId: params.contactId },
+        totalGrossAmount: grossAmount,
+        totalTaxAmount: taxAmount,
+        taxType: "gross",
         contactId: params.contactId,
-        lineItems: [ lineItem ]
+        voucherItems: [ voucherItem ]
     };
 
     if (remark) {
@@ -393,10 +436,9 @@ function createLexwarePurchaseInvoice_(params) {
     );
 
     Logger.log(
-        "Fixkosten: Beleg erstellt – Kategorie " + params.kategorieNr +
+        "Fixkosten: Beleg erstellt – Kategorie " + params.kategorieName +
         ", Brutto=" + grossAmount +
-        ", Netto=" + netAmount +
-        ", MwSt=" + taxRatePercentage + "%" +
+        ", MwSt=" + taxRatePercent + "%" +
         ", ID=" + voucherId
     );
 
@@ -452,12 +494,14 @@ function createLexwareFixkosten() {
 
     // Cache contact IDs to avoid repeated API calls for same supplier
     var contactCache = {};
+    // Cache posting-category UUIDs to avoid repeated API calls for same category
+    var categoryCache = {};
 
     for (var i = 0; i < data.length; i++) {
         var row = data[i];
         var rowNum = i + 2; // 1-based sheet row
 
-        var kategorieNr        = String(readCell_(row, colMap, "Kategorie_Nr")                          || "").trim();
+        var kategorieName      = String(readCell_(row, colMap, "Kategorie", "Kategorie_Nr")              || "").trim();
         var lieferant          = String(readCell_(row, colMap, "Lieferant")                             || "").trim();
         // Fall back to "Lieferant" when a dedicated "Lieferantennummer" column is absent
         var lieferantennummer  = String(readCell_(row, colMap, "Lieferantennummer", "Lieferant")        || "").trim();
@@ -472,9 +516,9 @@ function createLexwareFixkosten() {
         var zuletztGebucht     = String(readCell_(row, colMap, "Zuletzt_Gebucht")                       || "").trim();
 
         // Skip empty or inactive rows
-        if (!kategorieNr && !lieferantennummer) { skipped++; continue; }
+        if (!kategorieName && !lieferantennummer) { skipped++; continue; }
         if (aktiv === false || String(aktiv).toUpperCase() === "FALSE" || aktiv === 0) {
-            Logger.log("Fixkosten: Zeile " + rowNum + " (Kat. " + kategorieNr + ") – inaktiv, übersprungen.");
+            Logger.log("Fixkosten: Zeile " + rowNum + " (Kat. " + kategorieName + ") – inaktiv, übersprungen.");
             skipped++;
             continue;
         }
@@ -482,14 +526,14 @@ function createLexwareFixkosten() {
         // Validate required fields
         if (!lieferantennummer) {
             Logger.log(
-                "Fixkosten: Zeile " + rowNum + " (Kat. " + kategorieNr + ")" +
+                "Fixkosten: Zeile " + rowNum + " (Kat. " + kategorieName + ")" +
                 " – Lieferantennummer fehlt, übersprungen."
             );
             skipped++;
             continue;
         }
         if (!betragBrutto || betragBrutto <= 0) {
-            Logger.log("Fixkosten: Zeile " + rowNum + " (Kat. " + kategorieNr + ") – Betrag fehlt oder 0, übersprungen.");
+            Logger.log("Fixkosten: Zeile " + rowNum + " (Kat. " + kategorieName + ") – Betrag fehlt oder 0, übersprungen.");
             skipped++;
             continue;
         }
@@ -497,7 +541,7 @@ function createLexwareFixkosten() {
         // Check due date
         var dueInfo = isFixkostenDue_(rhythmus, faelligkeitstag, faelligkeitsmonat, zuletztGebucht, now);
         if (!dueInfo) {
-            Logger.log("Fixkosten: Zeile " + rowNum + " (Kat. " + kategorieNr + ") – noch nicht fällig.");
+            Logger.log("Fixkosten: Zeile " + rowNum + " (Kat. " + kategorieName + ") – noch nicht fällig.");
             skipped++;
             continue;
         }
@@ -510,12 +554,29 @@ function createLexwareFixkosten() {
         }
         if (!contactId) {
             Logger.log(
-                "Fixkosten: Zeile " + rowNum + " (Kat. " + kategorieNr + ")" +
+                "Fixkosten: Zeile " + rowNum + " (Kat. " + kategorieName + ")" +
                 " – Lieferantennummer '" + lieferantennummer +
                 "' (" + (lieferant || "?") + ") nicht in Lexware gefunden, übersprungen."
             );
             errors++;
             continue;
+        }
+
+        // Look up posting category UUID (cached per category number)
+        var categoryId = null;
+        if (kategorieName) {
+            if (Object.prototype.hasOwnProperty.call(categoryCache, kategorieName)) {
+                categoryId = categoryCache[kategorieName];
+            } else {
+                categoryId = findLexwarePostingCategoryId_(kategorieName);
+                categoryCache[kategorieName] = categoryId;
+            }
+            if (!categoryId) {
+                Logger.log(
+                    "Fixkosten: Zeile " + rowNum + " (Kat. " + kategorieName + ")" +
+                    " – Buchungskategorie nicht gefunden, Beleg wird ohne Kategorie erstellt."
+                );
+            }
         }
 
         // Create purchase invoice
@@ -524,7 +585,8 @@ function createLexwareFixkosten() {
                 contactId:   contactId,
                 voucherDate: dueInfo.voucherDate,
                 dueDate:     dueInfo.dueDate,
-                kategorieNr: kategorieNr,
+                kategorieName: kategorieName,
+                categoryId:  categoryId,
                 betragBrutto: betragBrutto,
                 mwstSatz:    mwstSatz,
                 konto_iban:  kontoIban,
@@ -540,13 +602,13 @@ function createLexwareFixkosten() {
             }
 
             Logger.log(
-                "Fixkosten: ✅ Zeile " + rowNum + " (Kat. " + kategorieNr + ")" +
+                "Fixkosten: ✅ Zeile " + rowNum + " (Kat. " + kategorieName + ")" +
                 " – Beleg erstellt: " + voucherId
             );
             created++;
         } catch (e) {
             Logger.log(
-                "Fixkosten: ❌ Zeile " + rowNum + " (Kat. " + kategorieNr + ")" +
+                "Fixkosten: ❌ Zeile " + rowNum + " (Kat. " + kategorieName + ")" +
                 " – Fehler beim Erstellen: " + e.message
             );
             errors++;
