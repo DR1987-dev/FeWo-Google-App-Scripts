@@ -314,7 +314,7 @@ var LEXWARE_KONTOSTAND_HEADERS = [
 ];
 
 /**
- * Fetches all bank accounts from lexoffice and writes them to the
+ * Fetches all bank accounts from Lexware and writes them to the
  * "Lexware_Kontostand" sheet (or the sheet configured via the
  * LEXWARE_KONTOSTAND_SHEET_NAME script property).
  *
@@ -406,7 +406,7 @@ var LEXWARE_FINANZEN_HEADERS = [
 ];
 
 /**
- * Fetches all bank transactions from lexoffice and upserts them into the
+ * Fetches all bank transactions from Lexware and upserts them into the
  * "Lexware_Finanzen" sheet (or the sheet configured via the
  * LEXWARE_FINANZEN_SHEET_NAME script property).
  *
@@ -555,7 +555,7 @@ function importLexwareFinanzen() {
     });
 
     if (newRows.length > 0) {
-        sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, newRows[0].length).setValues(newRows);
+        sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, LEXWARE_FINANZEN_HEADERS.length).setValues(newRows);
     }
 
     Logger.log(
