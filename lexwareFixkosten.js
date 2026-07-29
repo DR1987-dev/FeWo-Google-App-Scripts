@@ -154,8 +154,10 @@ function isFixkostenDue_(rhythmus, faelligkeitstag, faelligkeitsmonat, zuletztGe
     } else if (r === "jährlich") {
         // Annual: period spans the whole calendar year
         periodStart = new Date(today.getFullYear(), 0, 1);
-        periodEnd   = new Date(today.getFullYear(), 11, 31);
+        periodEnd   = new Date(today.getFullYear(), 12, 0); // last day of December
         // faelligkeitsmonat: 1=January (default), 2=February, ..., 12=December
+        // Note: if billingMonth is before today's month, the voucher date will be in the
+        // past within this calendar year — this is intentional (the period is the full year).
         billingMonth = Math.max(1, Math.min(12, parseInt(faelligkeitsmonat, 10) || 1)) - 1;
     } else {
         Logger.log("Fixkosten: Unbekannter Rhythmus '" + rhythmus + "' – übersprungen.");
@@ -341,8 +343,8 @@ function createLexwarePurchaseInvoice_(params) {
  * fälligen, aktiven Eintrag eine Eingangsrechnung in Lexware.
  *
  * Zurückgeschrieben werden:
- *   - Spalte J (Zuletzt_Gebucht)  – heutiges Datum
- *   - Spalte K (Lexware_Beleg_ID) – UUID des erstellten Belegs
+ *   - Spalte L (Zuletzt_Gebucht)  – heutiges Datum
+ *   - Spalte M (Lexware_Beleg_ID) – UUID des erstellten Belegs
  *
  * @return {{ok:boolean, created:number, skipped:number, errors:number}}
  */
