@@ -423,8 +423,7 @@ function createLexwarePurchaseInvoice_(params) {
         totalGrossAmount: grossAmount,
         totalTaxAmount: taxAmount,
         taxType: "gross",
-        // Lexware Office API expects the contact nested under a "contact" object.
-        contact: { contactId: params.contactId },
+        contactId: params.contactId,
         voucherItems: [ voucherItem ]
     };
 
