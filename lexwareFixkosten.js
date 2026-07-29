@@ -10,17 +10,18 @@
 // Erforderliche Spalten im Blatt "Lexware Fixkosten"
 // (Reihenfolge muss exakt eingehalten werden):
 //
-//  Spalte A  Bezeichnung      – Freitext, z. B. "Strom Q1"
-//  Spalte B  Lieferant        – Name des Lieferanten exakt wie in Lexware
-//  Spalte C  Betrag_Netto     – Nettobetrag in EUR (Zahl, z. B. 120.00)
-//  Spalte D  MwSt_Satz        – Steuersatz in % (0, 7 oder 19)
-//  Spalte E  Rhythmus         – monatlich | quartalsweise | jährlich
-//  Spalte F  Fälligkeitstag   – Tag im Monat (1–28), an dem die Rechnung fällig ist
-//  Spalte G  Konto_IBAN       – IBAN des abbuchenden Kontos (fremdes Konto, optional)
-//  Spalte H  Aktiv            – TRUE/FALSE – Zeile wird nur verarbeitet wenn TRUE
-//  Spalte I  Notiz            – Freitext, wird als Remark in Lexware übernommen
-//  Spalte J  Zuletzt_Gebucht  – wird vom Skript zurückgeschrieben (JJJJ-MM-TT)
-//  Spalte K  Lexware_Beleg_ID – wird vom Skript zurückgeschrieben (Lexware-UUID)
+//  Spalte A  Bezeichnung        – Freitext, z. B. "Strom Q1"
+//  Spalte B  Lieferant          – Anzeigename (nur zur Übersicht, kein API-Lookup)
+//  Spalte C  Lieferantennummer  – Kundennummer des Lieferanten in Lexware (contactNumber)
+//  Spalte D  Betrag_Netto       – Nettobetrag in EUR (Zahl, z. B. 120.00)
+//  Spalte E  MwSt_Satz          – Steuersatz in % (0, 7 oder 19)
+//  Spalte F  Rhythmus           – monatlich | quartalsweise | jährlich
+//  Spalte G  Fälligkeitstag     – Tag im Monat (1–28), an dem die Rechnung fällig ist
+//  Spalte H  Konto_IBAN         – IBAN des abbuchenden Kontos (fremdes Konto, optional)
+//  Spalte I  Aktiv              – TRUE/FALSE – Zeile wird nur verarbeitet wenn TRUE
+//  Spalte J  Notiz              – Freitext, wird als Remark in Lexware übernommen
+//  Spalte K  Zuletzt_Gebucht    – wird vom Skript zurückgeschrieben (JJJJ-MM-TT)
+//  Spalte L  Lexware_Beleg_ID   – wird vom Skript zurückgeschrieben (Lexware-UUID)
 //
 // Script Properties (optional):
 //   FIXKOSTEN_SHEET_NAME  – Name des Tabellenblatts (Standard: "Lexware Fixkosten")
@@ -29,32 +30,34 @@
 var FIXKOSTEN_DEFAULT_SHEET_NAME = "Lexware Fixkosten";
 
 var FIXKOSTEN_HEADERS = [
-    "Bezeichnung",       // A  1
-    "Lieferant",         // B  2
-    "Betrag_Netto",      // C  3
-    "MwSt_Satz",         // D  4
-    "Rhythmus",          // E  5
-    "Fälligkeitstag",    // F  6
-    "Konto_IBAN",        // G  7
-    "Aktiv",             // H  8
-    "Notiz",             // I  9
-    "Zuletzt_Gebucht",   // J  10
-    "Lexware_Beleg_ID"   // K  11
+    "Bezeichnung",        // A  1
+    "Lieferant",          // B  2  (Anzeigename, kein API-Lookup)
+    "Lieferantennummer",  // C  3  (contactNumber in Lexware – eindeutig)
+    "Betrag_Netto",       // D  4
+    "MwSt_Satz",          // E  5
+    "Rhythmus",           // F  6
+    "Fälligkeitstag",     // G  7
+    "Konto_IBAN",         // H  8
+    "Aktiv",              // I  9
+    "Notiz",              // J  10
+    "Zuletzt_Gebucht",    // K  11
+    "Lexware_Beleg_ID"    // L  12
 ];
 
 // Column indices (1-based for sheet operations)
 var FK_COL = {
-    BEZEICHNUNG:    1,
-    LIEFERANT:      2,
-    BETRAG_NETTO:   3,
-    MWST_SATZ:      4,
-    RHYTHMUS:       5,
-    FAELLIGKEITSTAG:6,
-    KONTO_IBAN:     7,
-    AKTIV:          8,
-    NOTIZ:          9,
-    ZULETZT_GEBUCHT:10,
-    LEXWARE_BELEG_ID:11
+    BEZEICHNUNG:       1,
+    LIEFERANT:         2,
+    LIEFERANTENNUMMER: 3,
+    BETRAG_NETTO:      4,
+    MWST_SATZ:         5,
+    RHYTHMUS:          6,
+    FAELLIGKEITSTAG:   7,
+    KONTO_IBAN:        8,
+    AKTIV:             9,
+    NOTIZ:             10,
+    ZULETZT_GEBUCHT:   11,
+    LEXWARE_BELEG_ID:  12
 };
 
 // ---- Config ------------------------------------------------
@@ -174,21 +177,22 @@ function formatDate_(d) {
 // ---- Lexware contact lookup --------------------------------
 
 /**
- * Sucht einen Kontakt in Lexware anhand seines Namens.
- * Gibt die erste exakte Übereinstimmung zurück (Groß-/Kleinschreibung ignoriert).
+ * Sucht einen Kontakt in Lexware anhand seiner Lieferantennummer (contactNumber).
+ * Diese Nummer ist in Lexware eindeutig und vermeidet Verwechslungen bei
+ * gleichlautenden Lieferantennamen.
  *
- * @param  {string} name  Lieferantenname
- * @return {string|null}  Lexware-UUID des Kontakts oder null
+ * @param  {string} contactNumber  Lieferantennummer aus Lexware (z. B. "L-1042")
+ * @return {string|null}           Lexware-UUID des Kontakts oder null
  */
-function findLexwareContactIdByName_(name) {
-    if (!name) return null;
-    var nameTrimmed = String(name).trim().toLowerCase();
+function findLexwareContactIdByNumber_(contactNumber) {
+    if (!contactNumber) return null;
+    var numberTrimmed = String(contactNumber).trim();
 
     var result;
     try {
-        result = lexwareRequest("/contacts", { name: name });
+        result = lexwareRequest("/contacts", { contactNumber: numberTrimmed });
     } catch (e) {
-        Logger.log("Fixkosten: Kontaktsuche fehlgeschlagen für '" + name + "': " + e.message);
+        Logger.log("Fixkosten: Kontaktsuche fehlgeschlagen für Nummer '" + numberTrimmed + "': " + e.message);
         return null;
     }
 
@@ -205,38 +209,25 @@ function findLexwareContactIdByName_(name) {
         contacts = [body];
     }
 
+    // Look for exact contactNumber match
     for (var i = 0; i < contacts.length; i++) {
         var c = contacts[i];
-        var cName = String(
-            c.company && c.company.name
-                ? c.company.name
-                : (c.displayName || c.name || "")
-        ).trim().toLowerCase();
-
-        if (cName === nameTrimmed) {
+        var cNum = String(c.contactNumber || c.number || c.customerNumber || "").trim();
+        if (cNum === numberTrimmed) {
             return String(c.id);
         }
     }
 
-    // Fallback: partial match
-    for (var j = 0; j < contacts.length; j++) {
-        var cf = contacts[j];
-        var cfName = String(
-            cf.company && cf.company.name
-                ? cf.company.name
-                : (cf.displayName || cf.name || "")
-        ).trim().toLowerCase();
-
-        if (cfName.indexOf(nameTrimmed) !== -1 || nameTrimmed.indexOf(cfName) !== -1) {
-            Logger.log(
-                "Fixkosten: Kontakt '" + name + "' via Teilübereinstimmung gefunden: " +
-                cfName + " (ID=" + cf.id + ")"
-            );
-            return String(cf.id);
-        }
+    // If the API returned exactly one result, accept it (some APIs filter server-side)
+    if (contacts.length === 1) {
+        Logger.log(
+            "Fixkosten: Kontakt für Nummer '" + numberTrimmed +
+            "' via Einzeltreffer gefunden (ID=" + contacts[0].id + ")."
+        );
+        return String(contacts[0].id);
     }
 
-    Logger.log("Fixkosten: Kein Kontakt in Lexware gefunden für '" + name + "'.");
+    Logger.log("Fixkosten: Kein eindeutiger Kontakt für Lieferantennummer '" + numberTrimmed + "' gefunden.");
     return null;
 }
 
@@ -360,19 +351,20 @@ function createLexwareFixkosten() {
         var row = data[i];
         var rowNum = i + 2; // 1-based sheet row
 
-        var bezeichnung     = String(row[FK_COL.BEZEICHNUNG - 1]     || "").trim();
-        var lieferant       = String(row[FK_COL.LIEFERANT - 1]       || "").trim();
-        var betragNetto     = Number(row[FK_COL.BETRAG_NETTO - 1])   || 0;
-        var mwstSatz        = Number(row[FK_COL.MWST_SATZ - 1])      || 0;
-        var rhythmus        = String(row[FK_COL.RHYTHMUS - 1]        || "").trim();
-        var faelligkeitstag = row[FK_COL.FAELLIGKEITSTAG - 1];
-        var kontoIban       = String(row[FK_COL.KONTO_IBAN - 1]      || "").trim();
-        var aktiv           = row[FK_COL.AKTIV - 1];
-        var notiz           = String(row[FK_COL.NOTIZ - 1]           || "").trim();
-        var zuletztGebucht  = String(row[FK_COL.ZULETZT_GEBUCHT - 1] || "").trim();
+        var bezeichnung       = String(row[FK_COL.BEZEICHNUNG - 1]       || "").trim();
+        var lieferant         = String(row[FK_COL.LIEFERANT - 1]         || "").trim();
+        var lieferantennummer = String(row[FK_COL.LIEFERANTENNUMMER - 1] || "").trim();
+        var betragNetto       = Number(row[FK_COL.BETRAG_NETTO - 1])     || 0;
+        var mwstSatz          = Number(row[FK_COL.MWST_SATZ - 1])        || 0;
+        var rhythmus          = String(row[FK_COL.RHYTHMUS - 1]          || "").trim();
+        var faelligkeitstag   = row[FK_COL.FAELLIGKEITSTAG - 1];
+        var kontoIban         = String(row[FK_COL.KONTO_IBAN - 1]        || "").trim();
+        var aktiv             = row[FK_COL.AKTIV - 1];
+        var notiz             = String(row[FK_COL.NOTIZ - 1]             || "").trim();
+        var zuletztGebucht    = String(row[FK_COL.ZULETZT_GEBUCHT - 1]   || "").trim();
 
         // Skip empty or inactive rows
-        if (!bezeichnung && !lieferant) { skipped++; continue; }
+        if (!bezeichnung && !lieferantennummer) { skipped++; continue; }
         if (aktiv === false || String(aktiv).toUpperCase() === "FALSE" || aktiv === 0) {
             Logger.log("Fixkosten: Zeile " + rowNum + " (" + bezeichnung + ") – inaktiv, übersprungen.");
             skipped++;
@@ -380,8 +372,11 @@ function createLexwareFixkosten() {
         }
 
         // Validate required fields
-        if (!lieferant) {
-            Logger.log("Fixkosten: Zeile " + rowNum + " – kein Lieferant angegeben, übersprungen.");
+        if (!lieferantennummer) {
+            Logger.log(
+                "Fixkosten: Zeile " + rowNum + " (" + bezeichnung + ")" +
+                " – Lieferantennummer fehlt, übersprungen."
+            );
             skipped++;
             continue;
         }
@@ -399,16 +394,17 @@ function createLexwareFixkosten() {
             continue;
         }
 
-        // Look up contact
-        var contactId = contactCache[lieferant];
+        // Look up contact by Lieferantennummer (cached per number)
+        var contactId = contactCache[lieferantennummer];
         if (!contactId) {
-            contactId = findLexwareContactIdByName_(lieferant);
-            if (contactId) contactCache[lieferant] = contactId;
+            contactId = findLexwareContactIdByNumber_(lieferantennummer);
+            if (contactId) contactCache[lieferantennummer] = contactId;
         }
         if (!contactId) {
             Logger.log(
                 "Fixkosten: Zeile " + rowNum + " (" + bezeichnung + ")" +
-                " – Lieferant '" + lieferant + "' nicht in Lexware gefunden, übersprungen."
+                " – Lieferantennummer '" + lieferantennummer +
+                "' (" + (lieferant || "?") + ") nicht in Lexware gefunden, übersprungen."
             );
             errors++;
             continue;
