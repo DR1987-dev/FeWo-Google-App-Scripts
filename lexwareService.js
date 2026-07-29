@@ -78,7 +78,7 @@ function lexwareRequest(path, queryParams, baseUrl) {
 }
 
 function isLexwareStatusError_(error, statusCode) {
-    return !!error &&
+    return error instanceof Error &&
         error.name === "LexwareRequestError" &&
         error.statusCode === statusCode;
 }
@@ -357,6 +357,8 @@ function lexwareGetBankTransactions_(bankAccountId, page, pageSize, requestMode)
     if (lastError && lastError.statusCode !== undefined) {
         aggregateError.name = "LexwareRequestError";
         aggregateError.statusCode = lastError.statusCode;
+        aggregateError.url = lastError.url;
+        aggregateError.responseBody = lastError.responseBody;
     }
     throw aggregateError;
 }
