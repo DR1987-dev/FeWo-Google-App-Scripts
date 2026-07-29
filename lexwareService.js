@@ -5,6 +5,7 @@
 // ============================================================
 
 var LEXWARE_BASE_URL = "https://api.lexware.io/v1";
+var LEXWARE_BANKTRANSACTIONS_BASE_URL = "https://api.lexware.io/banktransactions/v1";
 var LEXWARE_DEFAULT_SHEET_NAME = "Lexware";
 
 // ---- Config ------------------------------------------------
@@ -29,9 +30,12 @@ function validateLexwareConfig() {
 
 // ---- HTTP helper -------------------------------------------
 
-function lexwareRequest(path, queryParams) {
+function lexwareRequest(path, queryParams, baseUrl) {
     var config = validateLexwareConfig();
-    var url = LEXWARE_BASE_URL + path;
+    var resolvedBaseUrl = baseUrl || LEXWARE_BASE_URL;
+    var url = path.indexOf("http://") === 0 || path.indexOf("https://") === 0
+        ? path
+        : resolvedBaseUrl + path;
 
     if (queryParams) {
         var parts = [];
@@ -281,21 +285,34 @@ function lexwareGetBankAccounts_() {
 }
 
 /**
- * Fetches one page of bank transactions from GET /v1/banktransactions.
+ * Fetches one page of bank transactions from Lexware's banktransactions API.
  *
  * @param {string|null} bankAccountId - Optional: limit results to one account.
  * @param {number} page               - 0-based page index.
  * @param {number} pageSize           - Items per page (max 250).
  */
 function lexwareGetBankTransactions_(bankAccountId, page, pageSize) {
+    var safePage = page || 0;
+    var safePageSize = pageSize || 100;
     var params = {
-        page: page || 0,
-        size: pageSize || 100
+        page: safePage + 1,
+        limit: safePageSize
     };
     if (bankAccountId) {
         params.bankAccountId = bankAccountId;
     }
-    return lexwareRequest("/banktransactions", params);
+    try {
+        return lexwareRequest("/banktransactions", params, LEXWARE_BANKTRANSACTIONS_BASE_URL);
+    } catch (e) {
+        var legacyParams = {
+            page: safePage,
+            size: safePageSize
+        };
+        if (bankAccountId) {
+            legacyParams.bankAccountId = bankAccountId;
+        }
+        return lexwareRequest("/banktransactions", legacyParams);
+    }
 }
 
 // ---- Sheet: Kontostand (bank account balances) -------------
@@ -465,8 +482,15 @@ function importLexwareFinanzen() {
     var totalPages = 1;
 
     do {
-        var result = lexwareGetBankTransactions_(null, page, pageSize);
-        var body = result.body;
+        var result;
+        var body;
+        try {
+            result = lexwareGetBankTransactions_(null, page, pageSize);
+            body = result.body;
+        } catch (e) {
+            Logger.log("Lexware: banktransactions endpoint not available – skipping Finanzen: " + e.message);
+            return { ok: false, sheet: sheetName, total: 0, inserted: 0, updated: 0, error: e.message };
+        }
 
         if (!body) {
             Logger.log("Lexware banktransactions: empty response on page " + page);
@@ -480,8 +504,10 @@ function importLexwareFinanzen() {
         allTransactions = allTransactions.concat(content);
 
         var pageInfo = body.page || {};
-        totalPages = pageInfo.totalPages !== undefined ? pageInfo.totalPages
-                   : (body.totalPages !== undefined ? body.totalPages : 1);
+        var explicitTotalPages = pageInfo.totalPages !== undefined ? pageInfo.totalPages
+                              : (body.totalPages !== undefined ? body.totalPages : null);
+        totalPages = explicitTotalPages !== null ? explicitTotalPages
+                   : (content.length === pageSize ? page + 2 : page + 1);
         page++;
     } while (page < totalPages);
 
