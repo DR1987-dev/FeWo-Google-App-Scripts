@@ -329,20 +329,24 @@ function importLexwareKontostand() {
 
     var sheet = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
 
-    var result = lexwareGetBankAccounts_();
-    var body = result.body;
-
     // API may return an array directly or wrap it in a "content" or "bankAccounts" property
     var accounts = [];
-    if (Array.isArray(body)) {
-        accounts = body;
-    } else if (body && Array.isArray(body.content)) {
-        accounts = body.content;
-    } else if (body && Array.isArray(body.bankAccounts)) {
-        accounts = body.bankAccounts;
-    } else if (body) {
-        // Single account object
-        accounts = [body];
+    try {
+        var result = lexwareGetBankAccounts_();
+        var body = result.body;
+        if (Array.isArray(body)) {
+            accounts = body;
+        } else if (body && Array.isArray(body.content)) {
+            accounts = body.content;
+        } else if (body && Array.isArray(body.bankAccounts)) {
+            accounts = body.bankAccounts;
+        } else if (body) {
+            // Single account object
+            accounts = [body];
+        }
+    } catch (e) {
+        Logger.log("Lexware: /bankaccounts endpoint not available – skipping Kontostand: " + e.message);
+        return { ok: false, sheet: sheetName, total: 0, error: e.message };
     }
 
     Logger.log("Lexware bankaccounts: fetched " + accounts.length + " account(s)");
@@ -639,6 +643,10 @@ function importLexwareAll() {
     importLexwareEinnahmen();
     importLexwareAusgaben();
     importLexwareUmsaetze();
-    importLexwareKontostand();
+    try {
+        importLexwareKontostand();
+    } catch (e) {
+        Logger.log("importLexwareKontostand skipped: " + e.message);
+    }
     importLexwareFinanzen();
 }
