@@ -17,11 +17,15 @@
 //  Spalte E  MwSt_Satz          – Steuersatz in % (0, 7 oder 19)
 //  Spalte F  Rhythmus           – monatlich | quartalsweise | jährlich
 //  Spalte G  Fälligkeitstag     – Tag im Monat (1–28), an dem die Rechnung fällig ist
-//  Spalte H  Konto_IBAN         – IBAN des abbuchenden Kontos (fremdes Konto, optional)
-//  Spalte I  Aktiv              – TRUE/FALSE – Zeile wird nur verarbeitet wenn TRUE
-//  Spalte J  Notiz              – Freitext, wird als Remark in Lexware übernommen
-//  Spalte K  Zuletzt_Gebucht    – wird vom Skript zurückgeschrieben (JJJJ-MM-TT)
-//  Spalte L  Lexware_Beleg_ID   – wird vom Skript zurückgeschrieben (Lexware-UUID)
+//  Spalte H  Fälligkeitsmonat   – Monat innerhalb der Periode (optional):
+//                                  monatlich:    ignoriert
+//                                  quartalsweise: 1=erster Monat (Standard), 2=zweiter, 3=dritter
+//                                  jährlich:      1=Januar (Standard) … 12=Dezember
+//  Spalte I  Konto_IBAN         – IBAN des abbuchenden Kontos (fremdes Konto, optional)
+//  Spalte J  Aktiv              – TRUE/FALSE – Zeile wird nur verarbeitet wenn TRUE
+//  Spalte K  Notiz              – Freitext, wird als Remark in Lexware übernommen
+//  Spalte L  Zuletzt_Gebucht    – wird vom Skript zurückgeschrieben (JJJJ-MM-TT)
+//  Spalte M  Lexware_Beleg_ID   – wird vom Skript zurückgeschrieben (Lexware-UUID)
 //
 // Script Properties (optional):
 //   FIXKOSTEN_SHEET_NAME  – Name des Tabellenblatts (Standard: "Lexware Fixkosten")
@@ -37,27 +41,29 @@ var FIXKOSTEN_HEADERS = [
     "MwSt_Satz",          // E  5
     "Rhythmus",           // F  6
     "Fälligkeitstag",     // G  7
-    "Konto_IBAN",         // H  8
-    "Aktiv",              // I  9
-    "Notiz",              // J  10
-    "Zuletzt_Gebucht",    // K  11
-    "Lexware_Beleg_ID"    // L  12
+    "Fälligkeitsmonat",   // H  8  (1–3 für quartalsweise; 1–12 für jährlich; leer=Standard)
+    "Konto_IBAN",         // I  9
+    "Aktiv",              // J  10
+    "Notiz",              // K  11
+    "Zuletzt_Gebucht",    // L  12
+    "Lexware_Beleg_ID"    // M  13
 ];
 
 // Column indices (1-based for sheet operations)
 var FK_COL = {
-    KATEGORIE_NR:      1,
-    LIEFERANT:         2,
-    LIEFERANTENNUMMER: 3,
-    BETRAG_BRUTTO:     4,
-    MWST_SATZ:         5,
-    RHYTHMUS:          6,
-    FAELLIGKEITSTAG:   7,
-    KONTO_IBAN:        8,
-    AKTIV:             9,
-    NOTIZ:             10,
-    ZULETZT_GEBUCHT:   11,
-    LEXWARE_BELEG_ID:  12
+    KATEGORIE_NR:       1,
+    LIEFERANT:          2,
+    LIEFERANTENNUMMER:  3,
+    BETRAG_BRUTTO:      4,
+    MWST_SATZ:          5,
+    RHYTHMUS:           6,
+    FAELLIGKEITSTAG:    7,
+    FAELLIGKEITSMONAT:  8,
+    KONTO_IBAN:         9,
+    AKTIV:              10,
+    NOTIZ:              11,
+    ZULETZT_GEBUCHT:    12,
+    LEXWARE_BELEG_ID:   13
 };
 
 // ---- Config ------------------------------------------------
@@ -105,47 +111,59 @@ function setupFixkostenSheet() {
  *
  * Fälligkeitstag-Logik:
  *   monatlich    – Buchung am Tag X des laufenden Monats.
- *   quartalsweise – Buchung am Tag X des ersten Monats im Quartal
- *                   (z. B. Tag 15 → 15. Jan / 15. Apr / 15. Jul / 15. Okt).
- *   jährlich     – Buchung am Tag X des Januars des laufenden Jahres.
+ *   quartalsweise – Buchung am Tag X des Monats Y im Quartal
+ *                   (Y=1: erster Monat = Jan/Apr/Jul/Okt, Y=2: zweiter, Y=3: dritter).
+ *                   Standardwert für Y ist 1.
+ *   jährlich     – Buchung am Tag X des Monats Y (1=Januar … 12=Dezember).
+ *                   Standardwert für Y ist 1 (Januar).
  *
- * @param {string}   rhythmus        "monatlich" | "quartalsweise" | "jährlich"
- * @param {number}   faelligkeitstag Tag im Monat (1–28)
- * @param {string}   zuletztGebucht  Datum der letzten Buchung ("JJJJ-MM-TT") oder ""
- * @param {Date}     now             Heutiges Datum
+ * @param {string}   rhythmus          "monatlich" | "quartalsweise" | "jährlich"
+ * @param {number}   faelligkeitstag   Tag im Monat (1–28)
+ * @param {number}   faelligkeitsmonat Monat innerhalb der Periode (optional):
+ *                                       quartalsweise: 1–3 (Standard 1)
+ *                                       jährlich:      1–12 (Standard 1)
+ * @param {string}   zuletztGebucht    Datum der letzten Buchung ("JJJJ-MM-TT") oder ""
+ * @param {Date}     now               Heutiges Datum
  * @return {{isDue:boolean, voucherDate:string, dueDate:string}|null}
  *         null wenn noch nicht fällig; andernfalls Objekt mit berechneten Daten.
  */
-function isFixkostenDue_(rhythmus, faelligkeitstag, zuletztGebucht, now) {
+function isFixkostenDue_(rhythmus, faelligkeitstag, faelligkeitsmonat, zuletztGebucht, now) {
     var today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     var day = Math.max(1, Math.min(28, parseInt(faelligkeitstag, 10) || 1));
 
     // Determine the start and end of the current billing period
     var periodStart;
     var periodEnd;
+    var billingMonth; // 0-based month index for the voucher date
 
     var r = String(rhythmus || "").toLowerCase().trim();
 
     if (r === "monatlich") {
         // Current period: 1st to last day of current month
-        periodStart = new Date(today.getFullYear(), today.getMonth(), 1);
-        periodEnd   = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+        periodStart  = new Date(today.getFullYear(), today.getMonth(), 1);
+        periodEnd    = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+        billingMonth = today.getMonth();
     } else if (r === "quartalsweise") {
-        // Quarter starts in month 0, 3, 6 or 9; due date falls on day X of that first month
+        // Quarter starts in month 0, 3, 6 or 9
         var qMonth = Math.floor(today.getMonth() / 3) * 3; // 0, 3, 6, 9
         periodStart = new Date(today.getFullYear(), qMonth, 1);
         periodEnd   = new Date(today.getFullYear(), qMonth + 3, 0);
+        // faelligkeitsmonat: 1=first month of quarter (default), 2=second, 3=third
+        var monthOffset = Math.max(1, Math.min(3, parseInt(faelligkeitsmonat, 10) || 1)) - 1;
+        billingMonth = qMonth + monthOffset;
     } else if (r === "jährlich") {
-        // Annual: due on day X of January; period spans the whole calendar year
+        // Annual: period spans the whole calendar year
         periodStart = new Date(today.getFullYear(), 0, 1);
         periodEnd   = new Date(today.getFullYear(), 11, 31);
+        // faelligkeitsmonat: 1=January (default), 2=February, ..., 12=December
+        billingMonth = Math.max(1, Math.min(12, parseInt(faelligkeitsmonat, 10) || 1)) - 1;
     } else {
         Logger.log("Fixkosten: Unbekannter Rhythmus '" + rhythmus + "' – übersprungen.");
         return null;
     }
 
-    // The voucher date is day X of the first month of the current period
-    var dueDateInPeriod = new Date(periodStart.getFullYear(), periodStart.getMonth(), day);
+    // The voucher date is day X of the billing month of the current period
+    var dueDateInPeriod = new Date(today.getFullYear(), billingMonth, day);
 
     // If we haven't reached the due day yet this period, not due
     if (today < dueDateInPeriod) {
@@ -361,17 +379,18 @@ function createLexwareFixkosten() {
         var row = data[i];
         var rowNum = i + 2; // 1-based sheet row
 
-        var kategorieNr       = String(row[FK_COL.KATEGORIE_NR - 1]       || "").trim();
-        var lieferant         = String(row[FK_COL.LIEFERANT - 1]         || "").trim();
-        var lieferantennummer = String(row[FK_COL.LIEFERANTENNUMMER - 1] || "").trim();
-        var betragBrutto      = Number(row[FK_COL.BETRAG_BRUTTO - 1])    || 0;
-        var mwstSatz          = Number(row[FK_COL.MWST_SATZ - 1])        || 0;
-        var rhythmus          = String(row[FK_COL.RHYTHMUS - 1]          || "").trim();
-        var faelligkeitstag   = row[FK_COL.FAELLIGKEITSTAG - 1];
-        var kontoIban         = String(row[FK_COL.KONTO_IBAN - 1]        || "").trim();
-        var aktiv             = row[FK_COL.AKTIV - 1];
-        var notiz             = String(row[FK_COL.NOTIZ - 1]             || "").trim();
-        var zuletztGebucht    = String(row[FK_COL.ZULETZT_GEBUCHT - 1]   || "").trim();
+        var kategorieNr        = String(row[FK_COL.KATEGORIE_NR - 1]        || "").trim();
+        var lieferant          = String(row[FK_COL.LIEFERANT - 1]          || "").trim();
+        var lieferantennummer  = String(row[FK_COL.LIEFERANTENNUMMER - 1]  || "").trim();
+        var betragBrutto       = Number(row[FK_COL.BETRAG_BRUTTO - 1])     || 0;
+        var mwstSatz           = Number(row[FK_COL.MWST_SATZ - 1])         || 0;
+        var rhythmus           = String(row[FK_COL.RHYTHMUS - 1]           || "").trim();
+        var faelligkeitstag    = row[FK_COL.FAELLIGKEITSTAG - 1];
+        var faelligkeitsmonat  = row[FK_COL.FAELLIGKEITSMONAT - 1];
+        var kontoIban          = String(row[FK_COL.KONTO_IBAN - 1]         || "").trim();
+        var aktiv              = row[FK_COL.AKTIV - 1];
+        var notiz              = String(row[FK_COL.NOTIZ - 1]              || "").trim();
+        var zuletztGebucht     = String(row[FK_COL.ZULETZT_GEBUCHT - 1]    || "").trim();
 
         // Skip empty or inactive rows
         if (!kategorieNr && !lieferantennummer) { skipped++; continue; }
@@ -397,7 +416,7 @@ function createLexwareFixkosten() {
         }
 
         // Check due date
-        var dueInfo = isFixkostenDue_(rhythmus, faelligkeitstag, zuletztGebucht, now);
+        var dueInfo = isFixkostenDue_(rhythmus, faelligkeitstag, faelligkeitsmonat, zuletztGebucht, now);
         if (!dueInfo) {
             Logger.log("Fixkosten: Zeile " + rowNum + " (Kat. " + kategorieNr + ") – noch nicht fällig.");
             skipped++;
