@@ -78,7 +78,7 @@ function lexwareRequest(path, queryParams, baseUrl) {
 }
 
 function isLexwareStatusError_(error, statusCode) {
-    return error instanceof Error &&
+    return !!error &&
         error.name === "LexwareRequestError" &&
         error.statusCode === statusCode;
 }
@@ -437,7 +437,7 @@ function importLexwareKontostand() {
         Logger.log(
             isLexwareEndpointUnavailableError_(e)
                 ? "Lexware: bankaccounts endpoint unavailable (404) – skipping Kontostand"
-                : "Lexware: /bankaccounts endpoint not available – skipping Kontostand: " + e.message
+                : "Lexware: bankaccounts endpoint not available – skipping Kontostand: " + e.message
         );
         return { ok: false, sheet: sheetName, total: 0, error: e.message };
     }
