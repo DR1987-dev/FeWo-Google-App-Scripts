@@ -390,9 +390,9 @@ function findLexwarePostingCategoryId_(displayNumber) {
  * @return {string}  Lexware-UUID des erstellten Belegs
  */
 function createLexwarePurchaseInvoice_(params) {
-    var taxRatePercentage = Number(params.mwstSatz) || 0;
+    var taxRatePercent = Number(params.mwstSatz) || 0;
     var grossAmount = round2(Number(params.betragBrutto) || 0);
-    var netAmount = round2(grossAmount / (1 + taxRatePercentage / 100));
+    var taxAmount = round2(grossAmount - grossAmount / (1 + taxRatePercent / 100));
 
     // Build remark: include IBAN of debit account if provided
     var remark = params.notiz ? String(params.notiz).trim() : "";
@@ -401,40 +401,31 @@ function createLexwarePurchaseInvoice_(params) {
         remark = remark ? remark + " | " + ibanNote : ibanNote;
     }
 
-    // Line item name: use notiz as display text, otherwise fall back to category number or generic label
-    var lineItemName = (params.notiz && String(params.notiz).trim())
-        || (params.kategorieNr ? "Kategorie " + params.kategorieNr : "Fixkosten");
+    // Voucher item as required by the Lexware POST /v1/vouchers API:
+    //   amount          – gross amount of the line item
+    //   taxAmount       – tax portion of amount
+    //   taxRatePercent  – tax rate in %
+    //   categoryId      – UUID from GET /v1/posting-categories
+    var voucherItem = {
+        amount: grossAmount,
+        taxAmount: taxAmount,
+        taxRatePercent: taxRatePercent
+    };
 
-    var lineItem = {
-                type: "custom",
-                name: lineItemName,
-                quantity: 1,
-                unitName: "Pauschal",
-                unitPrice: {
-                    currency: "EUR",
-                    netAmount: netAmount,
-                    grossAmount: grossAmount,
-                    taxRatePercentage: taxRatePercentage
-                },
-                lineItemAmount: grossAmount
-            };
-
-    // Use the posting-category UUID (categoryId) when available.
-    // This is required by the Lexware posting-categories endpoint.
     if (params.categoryId) {
-        lineItem.categoryId = params.categoryId;
+        voucherItem.categoryId = params.categoryId;
     }
 
     var payload = {
         type: "purchaseinvoice",
         voucherDate: params.voucherDate,
         dueDate: params.dueDate,
-        voucherStatus: "open",
+        totalGrossAmount: grossAmount,
+        totalTaxAmount: taxAmount,
+        taxType: "gross",
         // Lexware Office API expects the contact nested under a "contact" object.
-        // The flat "contactId" field is kept for older/alternative API versions.
         contact: { contactId: params.contactId },
-        contactId: params.contactId,
-        lineItems: [ lineItem ]
+        voucherItems: [ voucherItem ]
     };
 
     if (remark) {
@@ -451,8 +442,7 @@ function createLexwarePurchaseInvoice_(params) {
     Logger.log(
         "Fixkosten: Beleg erstellt – Kategorie " + params.kategorieNr +
         ", Brutto=" + grossAmount +
-        ", Netto=" + netAmount +
-        ", MwSt=" + taxRatePercentage + "%" +
+        ", MwSt=" + taxRatePercent + "%" +
         ", ID=" + voucherId
     );
 
