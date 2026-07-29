@@ -97,13 +97,19 @@ function setupFixkostenSheet() {
 // ---- Due-date logic ----------------------------------------
 
 /**
- * Prüft, ob eine Fixkosten-Zeile im aktuellen Periode fällig ist und
+ * Prüft, ob eine Fixkosten-Zeile in der aktuellen Periode fällig ist und
  * noch nicht gebucht wurde.
  *
- * @param {string}   rhythmus      "monatlich" | "quartalsweise" | "jährlich"
- * @param {number}   faelligkeitstag  Tag im Monat (1–28)
- * @param {string}   zuletztGebucht  Datum des letzten Buchung ("JJJJ-MM-TT") oder ""
- * @param {Date}     now           Heutiges Datum
+ * Fälligkeitstag-Logik:
+ *   monatlich    – Buchung am Tag X des laufenden Monats.
+ *   quartalsweise – Buchung am Tag X des ersten Monats im Quartal
+ *                   (z. B. Tag 15 → 15. Jan / 15. Apr / 15. Jul / 15. Okt).
+ *   jährlich     – Buchung am Tag X des Januars des laufenden Jahres.
+ *
+ * @param {string}   rhythmus        "monatlich" | "quartalsweise" | "jährlich"
+ * @param {number}   faelligkeitstag Tag im Monat (1–28)
+ * @param {string}   zuletztGebucht  Datum der letzten Buchung ("JJJJ-MM-TT") oder ""
+ * @param {Date}     now             Heutiges Datum
  * @return {{isDue:boolean, voucherDate:string, dueDate:string}|null}
  *         null wenn noch nicht fällig; andernfalls Objekt mit berechneten Daten.
  */
@@ -111,7 +117,7 @@ function isFixkostenDue_(rhythmus, faelligkeitstag, zuletztGebucht, now) {
     var today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     var day = Math.max(1, Math.min(28, parseInt(faelligkeitstag, 10) || 1));
 
-    // Determine the start of the current billing period
+    // Determine the start and end of the current billing period
     var periodStart;
     var periodEnd;
 
@@ -122,10 +128,12 @@ function isFixkostenDue_(rhythmus, faelligkeitstag, zuletztGebucht, now) {
         periodStart = new Date(today.getFullYear(), today.getMonth(), 1);
         periodEnd   = new Date(today.getFullYear(), today.getMonth() + 1, 0);
     } else if (r === "quartalsweise") {
+        // Quarter starts in month 0, 3, 6 or 9; due date falls on day X of that first month
         var qMonth = Math.floor(today.getMonth() / 3) * 3; // 0, 3, 6, 9
         periodStart = new Date(today.getFullYear(), qMonth, 1);
         periodEnd   = new Date(today.getFullYear(), qMonth + 3, 0);
     } else if (r === "jährlich") {
+        // Annual: due on day X of January; period spans the whole calendar year
         periodStart = new Date(today.getFullYear(), 0, 1);
         periodEnd   = new Date(today.getFullYear(), 11, 31);
     } else {
@@ -133,7 +141,7 @@ function isFixkostenDue_(rhythmus, faelligkeitstag, zuletztGebucht, now) {
         return null;
     }
 
-    // The due date of this period
+    // The voucher date is day X of the first month of the current period
     var dueDateInPeriod = new Date(periodStart.getFullYear(), periodStart.getMonth(), day);
 
     // If we haven't reached the due day yet this period, not due
@@ -265,8 +273,10 @@ function createLexwarePurchaseInvoice_(params) {
         voucherDate: params.voucherDate,
         dueDate: params.dueDate,
         voucherStatus: "open",
+        // Lexware Office API expects the contact nested under a "contact" object.
+        // The flat "contactId" field is kept for older/alternative API versions.
+        contact: { contactId: params.contactId },
         contactId: params.contactId,
-        remark: remark || undefined,
         lineItems: [
             {
                 type: "custom",
@@ -283,6 +293,10 @@ function createLexwarePurchaseInvoice_(params) {
             }
         ]
     };
+
+    if (remark) {
+        payload.remark = remark;
+    }
 
     var result = lexwarePostRequest_("/vouchers", payload);
     var body = result.body;
