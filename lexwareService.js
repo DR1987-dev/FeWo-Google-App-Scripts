@@ -66,10 +66,23 @@ function lexwareRequest(path, queryParams, baseUrl) {
     }
 
     if (status < 200 || status >= 300) {
-        throw new Error("Lexware request failed (" + status + ") for " + url + ": " + bodyText);
+        var requestError = new Error("Lexware request failed (" + status + ") for " + url + ": " + bodyText);
+        requestError.name = "LexwareRequestError";
+        requestError.statusCode = status;
+        requestError.url = url;
+        requestError.responseBody = bodyText;
+        throw requestError;
     }
 
     return { status: status, body: body };
+}
+
+function isLexwareStatusError_(error, statusCode) {
+    return !!error && Number(error.statusCode) === Number(statusCode);
+}
+
+function isLexwareEndpointUnavailableError_(error) {
+    return isLexwareStatusError_(error, 404);
 }
 
 // ---- API calls ---------------------------------------------
@@ -319,22 +332,30 @@ function lexwareGetBankTransactions_(bankAccountId, page, pageSize, requestMode)
         } catch (e) {
             lastError = e;
             attemptedVariants.push(requests[i].name);
-            Logger.log(
-                "Lexware banktransactions request variant failed (" +
-                requests[i].name +
-                ", page=" + safePage +
-                ", baseUrl=" + requests[i].baseUrl +
-                "): " + e.message
-            );
+            if (!isLexwareEndpointUnavailableError_(e)) {
+                Logger.log(
+                    "Lexware banktransactions request variant failed (" +
+                    requests[i].name +
+                    ", page=" + safePage +
+                    ", baseUrl=" + requests[i].baseUrl +
+                    "): " + e.message
+                );
+            }
         }
     }
-    Logger.log("Lexware banktransactions: all request variants failed");
-    throw new Error(
+    if (!isLexwareEndpointUnavailableError_(lastError)) {
+        Logger.log("Lexware banktransactions: all request variants failed");
+    }
+    var aggregateError = new Error(
         "Lexware banktransactions request failed for variants [" +
         attemptedVariants.join(", ") +
         "] on page " + safePage + ": " +
         (lastError ? lastError.message : "unknown error")
     );
+    if (lastError && lastError.statusCode !== undefined) {
+        aggregateError.statusCode = lastError.statusCode;
+    }
+    throw aggregateError;
 }
 
 function buildBankTransactionParams_(page, pageSize, bankAccountId, sizeKey) {
@@ -393,7 +414,11 @@ function importLexwareKontostand() {
             accounts = [body];
         }
     } catch (e) {
-        Logger.log("Lexware: /bankaccounts endpoint not available – skipping Kontostand: " + e.message);
+        Logger.log(
+            isLexwareEndpointUnavailableError_(e)
+                ? "Lexware: bankaccounts endpoint unavailable (404) – skipping Kontostand"
+                : "Lexware: /bankaccounts endpoint not available – skipping Kontostand: " + e.message
+        );
         return { ok: false, sheet: sheetName, total: 0, error: e.message };
     }
 
@@ -491,21 +516,6 @@ function importLexwareFinanzen() {
         });
     }
 
-    // Optionally fetch account names once for display
-    var accountNames = {};
-    try {
-        var accResult = lexwareGetBankAccounts_();
-        var accBody = accResult.body;
-        var accList = Array.isArray(accBody) ? accBody
-                    : (accBody && Array.isArray(accBody.content) ? accBody.content
-                    : (accBody && Array.isArray(accBody.bankAccounts) ? accBody.bankAccounts : []));
-        accList.forEach(function (a) {
-            if (a.id) accountNames[String(a.id)] = a.name || a.accountName || "";
-        });
-    } catch (e) {
-        Logger.log("Lexware: could not fetch bank account names: " + e.message);
-    }
-
     // Fetch all transaction pages
     var allTransactions = [];
     var page = 0;
@@ -521,7 +531,11 @@ function importLexwareFinanzen() {
             bankTransactionsRequestMode = bankTransactionsResult.requestMode;
             body = bankTransactionsResult.result.body;
         } catch (e) {
-            Logger.log("Lexware: banktransactions endpoint not available – skipping Finanzen: " + e.message);
+            Logger.log(
+                isLexwareEndpointUnavailableError_(e)
+                    ? "Lexware: banktransactions endpoint unavailable (404) – skipping Finanzen"
+                    : "Lexware: banktransactions endpoint not available – skipping Finanzen: " + e.message
+            );
             return { ok: false, status: "skipped", sheet: sheetName, total: 0, inserted: 0, updated: 0, error: e.message };
         }
 
@@ -549,6 +563,23 @@ function importLexwareFinanzen() {
             (explicitTotalPages !== null && page >= explicitTotalPages) ||
             (explicitTotalPages === null && content.length < pageSize)
         ) break;
+    }
+
+    // Optionally fetch account names once for display
+    var accountNames = {};
+    try {
+        var accResult = lexwareGetBankAccounts_();
+        var accBody = accResult.body;
+        var accList = Array.isArray(accBody) ? accBody
+                    : (accBody && Array.isArray(accBody.content) ? accBody.content
+                    : (accBody && Array.isArray(accBody.bankAccounts) ? accBody.bankAccounts : []));
+        accList.forEach(function (a) {
+            if (a.id) accountNames[String(a.id)] = a.name || a.accountName || "";
+        });
+    } catch (e) {
+        if (!isLexwareEndpointUnavailableError_(e)) {
+            Logger.log("Lexware: could not fetch bank account names: " + e.message);
+        }
     }
 
     Logger.log(
