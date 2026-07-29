@@ -264,20 +264,21 @@ function formatDate_(d) {
 // ---- Lexware contact lookup --------------------------------
 
 /**
- * Sucht einen Kontakt in Lexware anhand seiner Lieferantennummer (contactNumber).
- * Diese Nummer ist in Lexware eindeutig und vermeidet Verwechslungen bei
- * gleichlautenden Lieferantennamen.
+ * Sucht einen Kontakt in Lexware anhand seiner Lieferantennummer (vendorNumber).
+ * Lexware speichert Lieferantennummern im Vendor-Role-Objekt des Kontakts
+ * (roles.vendor.vendorNumber). Der Endpunkt unterstützt die Filterung per
+ * vendorNumber-Abfrageparameter.
  *
- * @param  {string} contactNumber  Lieferantennummer aus Lexware (z. B. "L-1042")
- * @return {string|null}           Lexware-UUID des Kontakts oder null
+ * @param  {string} vendorNumber  Lieferantennummer aus Lexware (z. B. "70009")
+ * @return {string|null}          Lexware-UUID des Kontakts oder null
  */
-function findLexwareContactIdByNumber_(contactNumber) {
-    if (!contactNumber) return null;
-    var numberTrimmed = String(contactNumber).trim();
+function findLexwareContactIdByNumber_(vendorNumber) {
+    if (!vendorNumber) return null;
+    var numberTrimmed = String(vendorNumber).trim();
 
     var result;
     try {
-        result = lexwareRequest("/contacts", { contactNumber: numberTrimmed });
+        result = lexwareRequest("/contacts", { vendorNumber: numberTrimmed });
     } catch (e) {
         Logger.log("Fixkosten: Kontaktsuche fehlgeschlagen für Nummer '" + numberTrimmed + "': " + e.message);
         return null;
@@ -296,16 +297,24 @@ function findLexwareContactIdByNumber_(contactNumber) {
         contacts = [body];
     }
 
-    // Look for exact contactNumber match
+    // Look for exact match in all known vendor-number fields
     for (var i = 0; i < contacts.length; i++) {
         var c = contacts[i];
-        var cNum = String(c.contactNumber || c.number || c.customerNumber || "").trim();
+        var cNum = String(
+            c.vendorNumber || c.contactNumber || c.number || c.customerNumber || ""
+        ).trim();
+        // Also check the nested vendor role (Lexware contacts API)
+        if (!cNum && c.roles && c.roles.vendor) {
+            cNum = String(
+                c.roles.vendor.vendorNumber || c.roles.vendor.number || ""
+            ).trim();
+        }
         if (cNum === numberTrimmed) {
             return String(c.id);
         }
     }
 
-    // If the API returned exactly one result, accept it (some APIs filter server-side)
+    // If the API returned exactly one result, accept it (server-side filtering)
     if (contacts.length === 1) {
         Logger.log(
             "Fixkosten: Kontakt für Nummer '" + numberTrimmed +
@@ -318,6 +327,51 @@ function findLexwareContactIdByNumber_(contactNumber) {
     return null;
 }
 
+/**
+ * Sucht eine Buchungskategorie in Lexware anhand ihrer Anzeigenummer.
+ * Ruft GET /v1/posting-categories auf und gibt die UUID der passenden
+ * Kategorie zurück.
+ *
+ * @param  {string|number} displayNumber  Buchungskategorienummer (z. B. "6325" oder 6325)
+ * @return {string|null}                  Lexware-UUID der Kategorie oder null
+ */
+function findLexwarePostingCategoryId_(displayNumber) {
+    if (!displayNumber) return null;
+    var numStr = String(displayNumber).trim();
+
+    var result;
+    try {
+        result = lexwareRequest("/posting-categories");
+    } catch (e) {
+        Logger.log("Fixkosten: Buchungskategorie-Suche fehlgeschlagen für '" + numStr + "': " + e.message);
+        return null;
+    }
+
+    var body = result.body;
+    var categories = [];
+
+    if (Array.isArray(body)) {
+        categories = body;
+    } else if (body && Array.isArray(body.content)) {
+        categories = body.content;
+    } else if (body && Array.isArray(body.categories)) {
+        categories = body.categories;
+    }
+
+    for (var i = 0; i < categories.length; i++) {
+        var cat = categories[i];
+        var catNum = String(
+            cat.displayNumber || cat.number || cat.accountNumber || ""
+        ).trim();
+        if (catNum === numStr) {
+            return String(cat.id);
+        }
+    }
+
+    Logger.log("Fixkosten: Keine Buchungskategorie für Nummer '" + numStr + "' gefunden.");
+    return null;
+}
+
 // ---- Voucher creation --------------------------------------
 
 /**
@@ -327,7 +381,8 @@ function findLexwareContactIdByNumber_(contactNumber) {
  * @param {string} params.contactId    Lexware-UUID des Lieferanten
  * @param {string} params.voucherDate  Belegdatum (JJJJ-MM-TT)
  * @param {string} params.dueDate      Fälligkeitsdatum (JJJJ-MM-TT)
- * @param {string} params.kategorieNr  Lexware-Buchungskategorie-Nummer (bookingKey, z. B. "4300")
+ * @param {string} params.kategorieNr  Buchungskategorie-Anzeigenummer (z. B. "6325"), nur für Logging
+ * @param {string} params.categoryId   Lexware-UUID der Buchungskategorie (aus /posting-categories)
  * @param {number} params.betragBrutto  Bruttobetrag
  * @param {number} params.mwstSatz     Mehrwertsteuersatz in % (0, 7 oder 19)
  * @param {string} params.konto_iban   IBAN des abbuchenden Kontos (optional, in Notiz)
@@ -364,9 +419,10 @@ function createLexwarePurchaseInvoice_(params) {
                 lineItemAmount: grossAmount
             };
 
-    var bookingKeyNum = parseInt(params.kategorieNr, 10);
-    if (!isNaN(bookingKeyNum) && bookingKeyNum > 0) {
-        lineItem.bookingKey = bookingKeyNum;
+    // Use the posting-category UUID (categoryId) when available.
+    // This is required by the Lexware posting-categories endpoint.
+    if (params.categoryId) {
+        lineItem.categoryId = params.categoryId;
     }
 
     var payload = {
@@ -452,6 +508,8 @@ function createLexwareFixkosten() {
 
     // Cache contact IDs to avoid repeated API calls for same supplier
     var contactCache = {};
+    // Cache posting-category UUIDs to avoid repeated API calls for same category
+    var categoryCache = {};
 
     for (var i = 0; i < data.length; i++) {
         var row = data[i];
@@ -518,6 +576,23 @@ function createLexwareFixkosten() {
             continue;
         }
 
+        // Look up posting category UUID (cached per category number)
+        var categoryId = null;
+        if (kategorieNr) {
+            if (Object.prototype.hasOwnProperty.call(categoryCache, kategorieNr)) {
+                categoryId = categoryCache[kategorieNr];
+            } else {
+                categoryId = findLexwarePostingCategoryId_(kategorieNr);
+                categoryCache[kategorieNr] = categoryId;
+            }
+            if (!categoryId) {
+                Logger.log(
+                    "Fixkosten: Zeile " + rowNum + " (Kat. " + kategorieNr + ")" +
+                    " – Buchungskategorie nicht gefunden, Beleg wird ohne Kategorie erstellt."
+                );
+            }
+        }
+
         // Create purchase invoice
         try {
             var voucherId = createLexwarePurchaseInvoice_({
@@ -525,6 +600,7 @@ function createLexwareFixkosten() {
                 voucherDate: dueInfo.voucherDate,
                 dueDate:     dueInfo.dueDate,
                 kategorieNr: kategorieNr,
+                categoryId:  categoryId,
                 betragBrutto: betragBrutto,
                 mwstSatz:    mwstSatz,
                 konto_iban:  kontoIban,
