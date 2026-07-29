@@ -80,7 +80,7 @@ function lexwareRequest(path, queryParams, baseUrl) {
 function isLexwareStatusError_(error, statusCode) {
     return !!error &&
         error.name === "LexwareRequestError" &&
-        Number(error.statusCode) === Number(statusCode);
+        error.statusCode === statusCode;
 }
 
 function isLexwareEndpointUnavailableError_(error) {
@@ -355,7 +355,7 @@ function lexwareGetBankTransactions_(bankAccountId, page, pageSize, requestMode)
         (lastError ? lastError.message : "unknown error")
     );
     if (lastError && lastError.statusCode !== undefined) {
-        aggregateError.name = lastError.name || "LexwareRequestError";
+        aggregateError.name = "LexwareRequestError";
         aggregateError.statusCode = lastError.statusCode;
     }
     throw aggregateError;
@@ -370,6 +370,8 @@ function buildBankTransactionParams_(page, pageSize, bankAccountId, sizeKey) {
     return params;
 }
 
+// Lexware may return bank transactions as a top-level array or wrap them
+// in "content" / "bankTransactions", depending on the endpoint variant.
 function extractLexwareBankTransactionContent_(body) {
     if (Array.isArray(body)) {
         return body;
