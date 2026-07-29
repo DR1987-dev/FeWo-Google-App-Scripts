@@ -72,6 +72,51 @@ function lexwareRequest(path, queryParams, baseUrl) {
     return { status: status, body: body };
 }
 
+/**
+ * Sends a POST or PUT request to the Lexware API with a JSON body.
+ *
+ * @param {string} path       API path, e.g. "/vouchers".
+ * @param {Object} payload    Object to JSON-encode as request body.
+ * @param {string} [method]   HTTP method: "post" (default) or "put".
+ * @param {string} [baseUrl]  Override for LEXWARE_BASE_URL.
+ * @return {{status:number, body:*}}
+ */
+function lexwarePostRequest_(path, payload, method, baseUrl) {
+    var config = validateLexwareConfig();
+    var resolvedBaseUrl = baseUrl || LEXWARE_BASE_URL;
+    var url = resolvedBaseUrl + path;
+
+    var options = {
+        method: method || "post",
+        muteHttpExceptions: true,
+        contentType: "application/json",
+        payload: JSON.stringify(payload),
+        headers: {
+            "Authorization": "Bearer " + config.apiKey,
+            "Accept": "application/json"
+        }
+    };
+
+    var response = UrlFetchApp.fetch(url, options);
+    var status = response.getResponseCode();
+    var bodyText = response.getContentText() || "";
+
+    var body;
+    try {
+        body = bodyText ? JSON.parse(bodyText) : null;
+    } catch (e) {
+        body = bodyText;
+    }
+
+    if (status < 200 || status >= 300) {
+        throw new Error(
+            "Lexware POST request failed (" + status + ") for " + url + ": " + bodyText
+        );
+    }
+
+    return { status: status, body: body };
+}
+
 // ---- API calls ---------------------------------------------
 
 /**
