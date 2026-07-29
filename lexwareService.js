@@ -33,9 +33,7 @@ function validateLexwareConfig() {
 function lexwareRequest(path, queryParams, baseUrl) {
     var config = validateLexwareConfig();
     var resolvedBaseUrl = baseUrl || LEXWARE_BASE_URL;
-    var url = path.indexOf("http://") === 0 || path.indexOf("https://") === 0
-        ? path
-        : resolvedBaseUrl + path;
+    var url = resolvedBaseUrl + path;
 
     if (queryParams) {
         var parts = [];
@@ -294,25 +292,38 @@ function lexwareGetBankAccounts_() {
 function lexwareGetBankTransactions_(bankAccountId, page, pageSize) {
     var safePage = page || 0;
     var safePageSize = pageSize || 100;
-    var params = {
-        page: safePage + 1,
-        limit: safePageSize
-    };
+    var requests = [
+        {
+            baseUrl: LEXWARE_BANKTRANSACTIONS_BASE_URL,
+            params: buildBankTransactionParams_(safePage, safePageSize, bankAccountId, "limit")
+        },
+        {
+            baseUrl: LEXWARE_BANKTRANSACTIONS_BASE_URL,
+            params: buildBankTransactionParams_(safePage + 1, safePageSize, bankAccountId, "limit")
+        },
+        {
+            baseUrl: LEXWARE_BASE_URL,
+            params: buildBankTransactionParams_(safePage, safePageSize, bankAccountId, "size")
+        }
+    ];
+    var lastError = null;
+    for (var i = 0; i < requests.length; i++) {
+        try {
+            return lexwareRequest("/banktransactions", requests[i].params, requests[i].baseUrl);
+        } catch (e) {
+            lastError = e;
+        }
+    }
+    throw lastError;
+}
+
+function buildBankTransactionParams_(page, pageSize, bankAccountId, sizeKey) {
+    var params = { page: page };
+    params[sizeKey] = pageSize;
     if (bankAccountId) {
         params.bankAccountId = bankAccountId;
     }
-    try {
-        return lexwareRequest("/banktransactions", params, LEXWARE_BANKTRANSACTIONS_BASE_URL);
-    } catch (e) {
-        var legacyParams = {
-            page: safePage,
-            size: safePageSize
-        };
-        if (bankAccountId) {
-            legacyParams.bankAccountId = bankAccountId;
-        }
-        return lexwareRequest("/banktransactions", legacyParams);
-    }
+    return params;
 }
 
 // ---- Sheet: Kontostand (bank account balances) -------------
@@ -479,9 +490,9 @@ function importLexwareFinanzen() {
     var allTransactions = [];
     var page = 0;
     var pageSize = 100;
-    var totalPages = 1;
+    var totalPages = null;
 
-    do {
+    while (true) {
         var result;
         var body;
         try {
@@ -504,16 +515,19 @@ function importLexwareFinanzen() {
         allTransactions = allTransactions.concat(content);
 
         var pageInfo = body.page || {};
-        var explicitTotalPages = pageInfo.totalPages !== undefined ? pageInfo.totalPages
-                              : (body.totalPages !== undefined ? body.totalPages : null);
-        totalPages = explicitTotalPages !== null ? explicitTotalPages
-                   : (content.length === pageSize ? page + 2 : page + 1);
+        if (pageInfo.totalPages !== undefined) {
+            totalPages = pageInfo.totalPages;
+        } else if (body.totalPages !== undefined) {
+            totalPages = body.totalPages;
+        }
         page++;
-    } while (page < totalPages);
+        if (totalPages !== null && page >= totalPages) break;
+        if (totalPages === null && content.length < pageSize) break;
+    }
 
     Logger.log(
         "Lexware banktransactions: fetched " +
-        allTransactions.length + " record(s) across " + totalPages + " page(s)"
+        allTransactions.length + " record(s) across " + page + " page(s)"
     );
 
     var newRows = [];
