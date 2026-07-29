@@ -270,6 +270,309 @@ function importLexwareUmsaetze() {
     return lexwareImportVouchersToSheet_(null, sheetName);
 }
 
+// ---- Finance / Bank accounts & transactions ----------------
+
+/**
+ * Fetches all bank accounts from GET /v1/bankaccounts.
+ * Returns the parsed response body.
+ */
+function lexwareGetBankAccounts_() {
+    return lexwareRequest("/bankaccounts");
+}
+
+/**
+ * Fetches one page of bank transactions from GET /v1/banktransactions.
+ *
+ * @param {string|null} bankAccountId - Optional: limit results to one account.
+ * @param {number} page               - 0-based page index.
+ * @param {number} pageSize           - Items per page (max 250).
+ */
+function lexwareGetBankTransactions_(bankAccountId, page, pageSize) {
+    var params = {
+        page: page || 0,
+        size: pageSize || 100
+    };
+    if (bankAccountId) {
+        params.bankAccountId = bankAccountId;
+    }
+    return lexwareRequest("/banktransactions", params);
+}
+
+// ---- Sheet: Kontostand (bank account balances) -------------
+
+var LEXWARE_KONTOSTAND_SHEET_NAME = "Lexware_Kontostand";
+
+var LEXWARE_KONTOSTAND_HEADERS = [
+    "ID",
+    "Kontoname",
+    "IBAN",
+    "Kontonummer",
+    "BIC",
+    "Kontostand",
+    "Währung",
+    "Zuletzt aktualisiert"
+];
+
+/**
+ * Fetches all bank accounts from Lexware and writes them to the
+ * "Lexware_Kontostand" sheet (or the sheet configured via the
+ * LEXWARE_KONTOSTAND_SHEET_NAME script property).
+ *
+ * @return {{ok:boolean, sheet:string, total:number}}
+ */
+function importLexwareKontostand() {
+    var props = PropertiesService.getScriptProperties();
+    var sheetName = (props.getProperty("LEXWARE_KONTOSTAND_SHEET_NAME") || LEXWARE_KONTOSTAND_SHEET_NAME).trim();
+
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) throw new Error("No active spreadsheet");
+
+    var sheet = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
+
+    var result = lexwareGetBankAccounts_();
+    var body = result.body;
+
+    // API may return an array directly or wrap it in a "content" or "bankAccounts" property
+    var accounts = [];
+    if (Array.isArray(body)) {
+        accounts = body;
+    } else if (body && Array.isArray(body.content)) {
+        accounts = body.content;
+    } else if (body && Array.isArray(body.bankAccounts)) {
+        accounts = body.bankAccounts;
+    } else if (body) {
+        // Single account object
+        accounts = [body];
+    }
+
+    Logger.log("Lexware bankaccounts: fetched " + accounts.length + " account(s)");
+
+    // Rebuild the sheet from scratch (small dataset – overwrite is fine)
+    sheet.clearContents();
+    sheet.appendRow(LEXWARE_KONTOSTAND_HEADERS);
+    sheet.getRange(1, 1, 1, LEXWARE_KONTOSTAND_HEADERS.length).setFontWeight("bold");
+
+    var rows = accounts.map(function (acc) {
+        var balance = "";
+        if (acc.balance !== undefined && acc.balance !== null) {
+            balance = typeof acc.balance === "object"
+                ? (acc.balance.value !== undefined ? acc.balance.value : JSON.stringify(acc.balance))
+                : acc.balance;
+        }
+        var currency = "";
+        if (acc.currency) {
+            currency = acc.currency;
+        } else if (acc.balance && acc.balance.currency) {
+            currency = acc.balance.currency;
+        } else {
+            currency = "EUR";
+        }
+        return [
+            String(acc.id || ""),
+            acc.name || acc.accountName || "",
+            acc.iban || "",
+            acc.accountNumber || "",
+            acc.bic || "",
+            balance,
+            currency,
+            acc.lastUpdated ? String(acc.lastUpdated).slice(0, 19).replace("T", " ") : ""
+        ];
+    });
+
+    if (rows.length > 0) {
+        sheet.getRange(2, 1, rows.length, LEXWARE_KONTOSTAND_HEADERS.length).setValues(rows);
+    }
+
+    Logger.log("Lexware Kontostand import complete: total=" + accounts.length);
+
+    return { ok: true, sheet: sheetName, total: accounts.length };
+}
+
+// ---- Sheet: Finanzen (bank transactions) -------------------
+
+var LEXWARE_FINANZEN_SHEET_NAME = "Lexware_Finanzen";
+
+var LEXWARE_FINANZEN_HEADERS = [
+    "ID",
+    "Konto-ID",
+    "Kontoname",
+    "Datum",
+    "Betrag",
+    "Währung",
+    "Typ",
+    "Zahlungsreferenz",
+    "Status",
+    "Buchungstext"
+];
+
+/**
+ * Fetches all bank transactions from Lexware and upserts them into the
+ * "Lexware_Finanzen" sheet (or the sheet configured via the
+ * LEXWARE_FINANZEN_SHEET_NAME script property).
+ *
+ * Transactions are matched by their ID (column 1) to avoid duplicates.
+ *
+ * @return {{ok:boolean, sheet:string, total:number, inserted:number, updated:number}}
+ */
+function importLexwareFinanzen() {
+    var props = PropertiesService.getScriptProperties();
+    var sheetName = (props.getProperty("LEXWARE_FINANZEN_SHEET_NAME") || LEXWARE_FINANZEN_SHEET_NAME).trim();
+
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) throw new Error("No active spreadsheet");
+
+    var sheet = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
+
+    if (sheet.getLastRow() === 0) {
+        sheet.appendRow(LEXWARE_FINANZEN_HEADERS);
+        sheet.getRange(1, 1, 1, LEXWARE_FINANZEN_HEADERS.length).setFontWeight("bold");
+    }
+
+    // Index existing rows by transaction ID (column 1)
+    var existingById = {};
+    var lastRow = sheet.getLastRow();
+    if (lastRow > 1) {
+        var existingData = sheet.getRange(2, 1, lastRow - 1, LEXWARE_FINANZEN_HEADERS.length).getValues();
+        existingData.forEach(function (row, idx) {
+            var id = String(row[0] || "").trim();
+            if (id) existingById[id] = { rowIndex: idx + 2, data: row };
+        });
+    }
+
+    // Optionally fetch account names once for display
+    var accountNames = {};
+    try {
+        var accResult = lexwareGetBankAccounts_();
+        var accBody = accResult.body;
+        var accList = Array.isArray(accBody) ? accBody
+                    : (accBody && Array.isArray(accBody.content) ? accBody.content
+                    : (accBody && Array.isArray(accBody.bankAccounts) ? accBody.bankAccounts : []));
+        accList.forEach(function (a) {
+            if (a.id) accountNames[String(a.id)] = a.name || a.accountName || "";
+        });
+    } catch (e) {
+        Logger.log("Lexware: could not fetch bank account names: " + e.message);
+    }
+
+    // Fetch all transaction pages
+    var allTransactions = [];
+    var page = 0;
+    var pageSize = 100;
+    var totalPages = 1;
+
+    do {
+        var result = lexwareGetBankTransactions_(null, page, pageSize);
+        var body = result.body;
+
+        if (!body) {
+            Logger.log("Lexware banktransactions: empty response on page " + page);
+            break;
+        }
+
+        var content = Array.isArray(body) ? body
+                    : (Array.isArray(body.content) ? body.content
+                    : (Array.isArray(body.bankTransactions) ? body.bankTransactions : []));
+
+        allTransactions = allTransactions.concat(content);
+
+        var pageInfo = body.page || {};
+        totalPages = pageInfo.totalPages !== undefined ? pageInfo.totalPages
+                   : (body.totalPages !== undefined ? body.totalPages : 1);
+        page++;
+    } while (page < totalPages);
+
+    Logger.log(
+        "Lexware banktransactions: fetched " +
+        allTransactions.length + " record(s) across " + totalPages + " page(s)"
+    );
+
+    var newRows = [];
+    var updatedCount = 0;
+
+    allTransactions.forEach(function (t) {
+        var id = String(
+            t.id || t.bankTransactionReference || t.transactionId || ""
+        ).trim();
+        if (!id) return;
+
+        var accountId = String(
+            (t.bankAccount && t.bankAccount.id) || t.bankAccountId || ""
+        );
+        var accountName = accountNames[accountId] || "";
+
+        var date = t.date || t.bookingDate || t.valueDate || "";
+        if (date) date = String(date).slice(0, 10);
+
+        var amount = "";
+        if (t.amount !== undefined && t.amount !== null) {
+            amount = typeof t.amount === "object"
+                ? (t.amount.value !== undefined ? t.amount.value : "")
+                : t.amount;
+        }
+
+        var currency = "";
+        if (t.currency) {
+            currency = t.currency;
+        } else if (t.amount && t.amount.currency) {
+            currency = t.amount.currency;
+        } else {
+            currency = "EUR";
+        }
+
+        var type = t.type || t.transactionType || "";
+        var paymentRef = "";
+        if (t.paymentReference) {
+            paymentRef = typeof t.paymentReference === "object"
+                ? (t.paymentReference.value || JSON.stringify(t.paymentReference))
+                : String(t.paymentReference);
+        }
+        var status = t.status || t.bookingStatus || "";
+        var purpose = t.purpose || t.description || t.bookingText || t.note || "";
+
+        var row = [
+            id,
+            accountId,
+            accountName,
+            date,
+            amount,
+            currency,
+            type,
+            paymentRef,
+            status,
+            purpose
+        ];
+
+        if (existingById[id]) {
+            var existing = existingById[id].data;
+            var changed = row.some(function (val, i) { return String(val) !== String(existing[i]); });
+            if (changed) {
+                sheet.getRange(existingById[id].rowIndex, 1, 1, row.length).setValues([row]);
+                updatedCount++;
+            }
+        } else {
+            newRows.push(row);
+        }
+    });
+
+    if (newRows.length > 0) {
+        sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, LEXWARE_FINANZEN_HEADERS.length).setValues(newRows);
+    }
+
+    Logger.log(
+        "Lexware Finanzen import complete: total=" + allTransactions.length +
+        ", inserted=" + newRows.length +
+        ", updated=" + updatedCount
+    );
+
+    return {
+        ok: true,
+        sheet: sheetName,
+        total: allTransactions.length,
+        inserted: newRows.length,
+        updated: updatedCount
+    };
+}
+
 // ---- File upload -------------------------------------------
 
 /**
@@ -323,15 +626,19 @@ function lexwareUploadFile_(blob, fileName) {
 // ---- All imports -------------------------------------------
 
 /**
- * Runs all four Lexware imports:
- *   1. importLexwareToSheet()   – outgoing invoices (Rechnungen)
- *   2. importLexwareEinnahmen() – income vouchers (Einnahmen)
- *   3. importLexwareAusgaben()  – expense vouchers (Ausgaben)
- *   4. importLexwareUmsaetze()  – all vouchers (Umsätze)
+ * Runs all Lexware imports:
+ *   1. importLexwareToSheet()    – outgoing invoices (Rechnungen)
+ *   2. importLexwareEinnahmen()  – income vouchers (Einnahmen)
+ *   3. importLexwareAusgaben()   – expense vouchers (Ausgaben)
+ *   4. importLexwareUmsaetze()   – all vouchers (Umsätze)
+ *   5. importLexwareKontostand() – bank account balances (Kontostand)
+ *   6. importLexwareFinanzen()   – all bank transactions (Finanzen)
  */
 function importLexwareAll() {
     importLexwareToSheet();
     importLexwareEinnahmen();
     importLexwareAusgaben();
     importLexwareUmsaetze();
+    importLexwareKontostand();
+    importLexwareFinanzen();
 }
