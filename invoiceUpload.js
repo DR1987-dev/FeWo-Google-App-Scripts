@@ -15,7 +15,7 @@
 //   INVOICE_UPLOAD_CUTOFF_DATE          – Buchungen mit CheckOut vor diesem Datum
 //                                          werden ignoriert (ISO: YYYY-MM-DD)
 //   LODGIFY_INVOICE_PATH_TEMPLATE       – Pfad-Template für den Invoice-Download.
-//                                          Standard: /v1/reservation/booking/{booking_id}/invoice
+//                                          Standard: /v2/reservations/bookings/{booking_id}/invoice
 //                                          {booking_id} wird durch die URL-kodierte Buchungs-ID ersetzt.
 // ============================================================
 
@@ -40,7 +40,7 @@ function getInvoiceUploadConfig_() {
 
     var invoicePathTemplate = (
         props.getProperty("LODGIFY_INVOICE_PATH_TEMPLATE") ||
-        "/v1/reservation/booking/{booking_id}/invoice"
+        "/v2/reservations/bookings/{booking_id}/invoice"
     ).trim();
 
     return {
@@ -66,11 +66,11 @@ function getInvoiceUploadConfig_() {
 function getLodgifyInvoicePdf_(bookingId, pathTemplate) {
     var lodgifyConfig = validateLodgifyConfig();
     var encodedId = encodeURIComponent(String(bookingId));
-    var template = pathTemplate || "/v1/reservation/booking/{booking_id}/invoice";
+    var template = pathTemplate || "/v2/reservations/bookings/{booking_id}/invoice";
 
     var paths = [
         template.replace("{booking_id}", encodedId),
-        "/v2/reservations/bookings/" + encodedId + "/invoice"
+        "/v1/reservation/booking/" + encodedId + "/invoice"
     ];
 
     // De-duplicate (in case the template already matches the fallback)
