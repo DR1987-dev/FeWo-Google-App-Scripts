@@ -294,14 +294,12 @@ function lexwareGetBankTransactions_(bankAccountId, page, pageSize) {
     var safePageSize = pageSize || 100;
     var requests = [
         {
-            baseUrl: LEXWARE_BANKTRANSACTIONS_BASE_URL,
-            params: buildBankTransactionParams_(safePage, safePageSize, bankAccountId, "limit")
-        },
-        {
+            name: "banktransactions-api",
             baseUrl: LEXWARE_BANKTRANSACTIONS_BASE_URL,
             params: buildBankTransactionParams_(safePage + 1, safePageSize, bankAccountId, "limit")
         },
         {
+            name: "legacy-public-api",
             baseUrl: LEXWARE_BASE_URL,
             params: buildBankTransactionParams_(safePage, safePageSize, bankAccountId, "size")
         }
@@ -312,6 +310,7 @@ function lexwareGetBankTransactions_(bankAccountId, page, pageSize) {
             return lexwareRequest("/banktransactions", requests[i].params, requests[i].baseUrl);
         } catch (e) {
             lastError = e;
+            Logger.log("Lexware banktransactions request variant failed (" + requests[i].name + "): " + e.message);
         }
     }
     throw lastError;
@@ -500,7 +499,7 @@ function importLexwareFinanzen() {
             body = result.body;
         } catch (e) {
             Logger.log("Lexware: banktransactions endpoint not available – skipping Finanzen: " + e.message);
-            return { ok: false, sheet: sheetName, total: 0, inserted: 0, updated: 0, error: e.message };
+            return { ok: false, skipped: true, sheet: sheetName, total: 0, inserted: 0, updated: 0, error: e.message };
         }
 
         if (!body) {
