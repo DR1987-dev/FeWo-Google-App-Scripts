@@ -13,7 +13,7 @@
 //  Spalte A  Bezeichnung        – Freitext, z. B. "Strom Q1"
 //  Spalte B  Lieferant          – Anzeigename (nur zur Übersicht, kein API-Lookup)
 //  Spalte C  Lieferantennummer  – Kundennummer des Lieferanten in Lexware (contactNumber)
-//  Spalte D  Betrag_Netto       – Nettobetrag in EUR (Zahl, z. B. 120.00)
+//  Spalte D  Betrag_Brutto      – Bruttobetrag in EUR (Zahl, z. B. 142.80)
 //  Spalte E  MwSt_Satz          – Steuersatz in % (0, 7 oder 19)
 //  Spalte F  Rhythmus           – monatlich | quartalsweise | jährlich
 //  Spalte G  Fälligkeitstag     – Tag im Monat (1–28), an dem die Rechnung fällig ist
@@ -33,7 +33,7 @@ var FIXKOSTEN_HEADERS = [
     "Bezeichnung",        // A  1
     "Lieferant",          // B  2  (Anzeigename, kein API-Lookup)
     "Lieferantennummer",  // C  3  (contactNumber in Lexware – eindeutig)
-    "Betrag_Netto",       // D  4
+    "Betrag_Brutto",      // D  4
     "MwSt_Satz",          // E  5
     "Rhythmus",           // F  6
     "Fälligkeitstag",     // G  7
@@ -49,7 +49,7 @@ var FK_COL = {
     BEZEICHNUNG:       1,
     LIEFERANT:         2,
     LIEFERANTENNUMMER: 3,
-    BETRAG_NETTO:      4,
+    BETRAG_BRUTTO:     4,
     MWST_SATZ:         5,
     RHYTHMUS:          6,
     FAELLIGKEITSTAG:   7,
@@ -241,7 +241,7 @@ function findLexwareContactIdByNumber_(contactNumber) {
  * @param {string} params.voucherDate  Belegdatum (JJJJ-MM-TT)
  * @param {string} params.dueDate      Fälligkeitsdatum (JJJJ-MM-TT)
  * @param {string} params.bezeichnung  Positionstext
- * @param {number} params.betragNetto  Nettobetrag
+ * @param {number} params.betragBrutto  Bruttobetrag
  * @param {number} params.mwstSatz     Mehrwertsteuersatz in % (0, 7 oder 19)
  * @param {string} params.konto_iban   IBAN des abbuchenden Kontos (optional, in Notiz)
  * @param {string} params.notiz        Freitext-Notiz (optional)
@@ -249,8 +249,8 @@ function findLexwareContactIdByNumber_(contactNumber) {
  */
 function createLexwarePurchaseInvoice_(params) {
     var taxRatePercentage = Number(params.mwstSatz) || 0;
-    var netAmount = round2(Number(params.betragNetto) || 0);
-    var grossAmount = round2(netAmount * (1 + taxRatePercentage / 100));
+    var grossAmount = round2(Number(params.betragBrutto) || 0);
+    var netAmount = round2(grossAmount / (1 + taxRatePercentage / 100));
 
     // Build remark: include IBAN of debit account if provided
     var remark = params.notiz ? String(params.notiz).trim() : "";
@@ -298,6 +298,7 @@ function createLexwarePurchaseInvoice_(params) {
 
     Logger.log(
         "Fixkosten: Beleg erstellt – " + params.bezeichnung +
+        ", Brutto=" + grossAmount +
         ", Netto=" + netAmount +
         ", MwSt=" + taxRatePercentage + "%" +
         ", ID=" + voucherId
@@ -354,7 +355,7 @@ function createLexwareFixkosten() {
         var bezeichnung       = String(row[FK_COL.BEZEICHNUNG - 1]       || "").trim();
         var lieferant         = String(row[FK_COL.LIEFERANT - 1]         || "").trim();
         var lieferantennummer = String(row[FK_COL.LIEFERANTENNUMMER - 1] || "").trim();
-        var betragNetto       = Number(row[FK_COL.BETRAG_NETTO - 1])     || 0;
+        var betragBrutto      = Number(row[FK_COL.BETRAG_BRUTTO - 1])    || 0;
         var mwstSatz          = Number(row[FK_COL.MWST_SATZ - 1])        || 0;
         var rhythmus          = String(row[FK_COL.RHYTHMUS - 1]          || "").trim();
         var faelligkeitstag   = row[FK_COL.FAELLIGKEITSTAG - 1];
@@ -380,7 +381,7 @@ function createLexwareFixkosten() {
             skipped++;
             continue;
         }
-        if (!betragNetto || betragNetto <= 0) {
+        if (!betragBrutto || betragBrutto <= 0) {
             Logger.log("Fixkosten: Zeile " + rowNum + " (" + bezeichnung + ") – Betrag fehlt oder 0, übersprungen.");
             skipped++;
             continue;
@@ -417,7 +418,7 @@ function createLexwareFixkosten() {
                 voucherDate: dueInfo.voucherDate,
                 dueDate:     dueInfo.dueDate,
                 bezeichnung: bezeichnung,
-                betragNetto: betragNetto,
+                betragBrutto: betragBrutto,
                 mwstSatz:    mwstSatz,
                 konto_iban:  kontoIban,
                 notiz:       notiz
