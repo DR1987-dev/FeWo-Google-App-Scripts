@@ -78,7 +78,9 @@ function lexwareRequest(path, queryParams, baseUrl) {
 }
 
 function isLexwareStatusError_(error, statusCode) {
-    return !!error && Number(error.statusCode) === Number(statusCode);
+    return !!error &&
+        error.name === "LexwareRequestError" &&
+        Number(error.statusCode) === Number(statusCode);
 }
 
 function isLexwareEndpointUnavailableError_(error) {
@@ -353,6 +355,7 @@ function lexwareGetBankTransactions_(bankAccountId, page, pageSize, requestMode)
         (lastError ? lastError.message : "unknown error")
     );
     if (lastError && lastError.statusCode !== undefined) {
+        aggregateError.name = lastError.name || "LexwareRequestError";
         aggregateError.statusCode = lastError.statusCode;
     }
     throw aggregateError;
@@ -365,6 +368,19 @@ function buildBankTransactionParams_(page, pageSize, bankAccountId, sizeKey) {
         params.bankAccountId = bankAccountId;
     }
     return params;
+}
+
+function extractLexwareBankTransactionContent_(body) {
+    if (Array.isArray(body)) {
+        return body;
+    }
+    if (body && Array.isArray(body.content)) {
+        return body.content;
+    }
+    if (body && Array.isArray(body.bankTransactions)) {
+        return body.bankTransactions;
+    }
+    return [];
 }
 
 // ---- Sheet: Kontostand (bank account balances) -------------
@@ -544,9 +560,7 @@ function importLexwareFinanzen() {
             break;
         }
 
-        var content = Array.isArray(body) ? body
-                    : (Array.isArray(body.content) ? body.content
-                    : (Array.isArray(body.bankTransactions) ? body.bankTransactions : []));
+        var content = extractLexwareBankTransactionContent_(body);
 
         allTransactions = allTransactions.concat(content);
 
