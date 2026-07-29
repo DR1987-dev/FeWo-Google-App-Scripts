@@ -437,6 +437,7 @@ function createLexwarePurchaseInvoice_(params) {
 
     var payload = {
         type: "purchaseinvoice",
+        voucherStatus: "paid",
         voucherNumber: voucherNumber,
         voucherDate: params.voucherDate,
         dueDate: params.dueDate,
