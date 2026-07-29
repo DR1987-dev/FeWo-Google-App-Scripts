@@ -16,7 +16,8 @@
 //  Spalte D  Betrag_Brutto      – Bruttobetrag in EUR (Zahl, z. B. 142.80)
 //  Spalte E  MwSt_Satz          – Steuersatz in % (0, 7 oder 19)
 //  Spalte F  Rhythmus           – monatlich | quartalsweise | jährlich
-//  Spalte G  Fälligkeitstag     – Tag im Monat (1–28), an dem die Rechnung fällig ist
+//  Spalte G  Fälligkeitstag     – Tag im Monat (1–31); wird auf den letzten Tag des
+//                                  Abrechnungsmonats begrenzt (z. B. 31 im Februar → 28/29)
 //  Spalte H  Fälligkeitsmonat   – Monat innerhalb der Periode (optional):
 //                                  monatlich:    ignoriert
 //                                  quartalsweise: 1=erster Monat (Standard), 2=zweiter, 3=dritter
@@ -40,7 +41,7 @@ var FIXKOSTEN_HEADERS = [
     "Betrag_Brutto",      // D  4
     "MwSt_Satz",          // E  5
     "Rhythmus",           // F  6
-    "Fälligkeitstag",     // G  7
+    "Fälligkeitstag",     // G  7  (1–31; wird auf letzten Tag des Abrechnungsmonats begrenzt)
     "Fälligkeitsmonat",   // H  8  (1–3 für quartalsweise; 1–12 für jährlich; leer=Standard)
     "Konto_IBAN",         // I  9
     "Aktiv",              // J  10
@@ -118,7 +119,8 @@ function setupFixkostenSheet() {
  *                   Standardwert für Y ist 1 (Januar).
  *
  * @param {string}   rhythmus          "monatlich" | "quartalsweise" | "jährlich"
- * @param {number}   faelligkeitstag   Tag im Monat (1–28)
+ * @param {number}   faelligkeitstag   Tag im Monat (1–31); wird auf den letzten Tag des
+ *                                      Abrechnungsmonats begrenzt (z. B. 31 → 28/29 im Februar)
  * @param {number}   faelligkeitsmonat Monat innerhalb der Periode (optional):
  *                                       quartalsweise: 1–3 (Standard 1)
  *                                       jährlich:      1–12 (Standard 1)
@@ -129,7 +131,8 @@ function setupFixkostenSheet() {
  */
 function isFixkostenDue_(rhythmus, faelligkeitstag, faelligkeitsmonat, zuletztGebucht, now) {
     var today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    var day = Math.max(1, Math.min(28, parseInt(faelligkeitstag, 10) || 1));
+    // Accept 1–31; the actual day will be clamped to the last day of the billing month below.
+    var day = Math.max(1, Math.min(31, parseInt(faelligkeitstag, 10) || 1));
 
     // Determine the start and end of the current billing period
     var periodStart;
@@ -164,8 +167,13 @@ function isFixkostenDue_(rhythmus, faelligkeitstag, faelligkeitsmonat, zuletztGe
         return null;
     }
 
+    // Clamp day to the actual number of days in the billing month.
+    // E.g. day=31 in February → 28 (or 29 in a leap year); day=31 in April → 30.
+    var lastDayOfBillingMonth = new Date(today.getFullYear(), billingMonth + 1, 0).getDate();
+    var effectiveDay = Math.min(day, lastDayOfBillingMonth);
+
     // The voucher date is day X of the billing month of the current period
-    var dueDateInPeriod = new Date(today.getFullYear(), billingMonth, day);
+    var dueDateInPeriod = new Date(today.getFullYear(), billingMonth, effectiveDay);
 
     // If we haven't reached the due day yet this period, not due
     if (today < dueDateInPeriod) {
