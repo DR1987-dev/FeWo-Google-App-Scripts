@@ -30,6 +30,15 @@ function validateLexwareConfig() {
 
 // ---- HTTP helper -------------------------------------------
 
+function getRetryAfterMs_(headers) {
+    if (!headers) return 0;
+    var retryAfter = headers["Retry-After"];
+    if (retryAfter === undefined || retryAfter === null) retryAfter = headers["retry-after"];
+    if (Array.isArray(retryAfter)) retryAfter = retryAfter[0];
+    var seconds = Number(retryAfter);
+    return seconds > 0 ? Math.round(seconds * 1000) : 0;
+}
+
 function lexwareRequest(path, queryParams, baseUrl) {
     var config = validateLexwareConfig();
     var resolvedBaseUrl = baseUrl || LEXWARE_BASE_URL;
@@ -54,9 +63,24 @@ function lexwareRequest(path, queryParams, baseUrl) {
         }
     };
 
-    var response = UrlFetchApp.fetch(url, options);
-    var status = response.getResponseCode();
-    var bodyText = response.getContentText() || "";
+    var response;
+    var status;
+    var bodyText = "";
+    var maxAttempts = 4;
+    for (var attempt = 0; attempt < maxAttempts; attempt++) {
+        response = UrlFetchApp.fetch(url, options);
+        status = response.getResponseCode();
+        bodyText = response.getContentText() || "";
+        if (status !== 429 || attempt === maxAttempts - 1) break;
+        var retryAfterMs = getRetryAfterMs_(response.getAllHeaders());
+        var backoffMs = retryAfterMs || Math.min(8000, Math.pow(2, attempt) * 1000);
+        Logger.log(
+            "Lexware request hit rate limit for " + url +
+            " – retry " + (attempt + 1) + "/" + (maxAttempts - 1) +
+            " in " + backoffMs + "ms."
+        );
+        Utilities.sleep(backoffMs);
+    }
 
     var body;
     try {
@@ -97,9 +121,24 @@ function lexwarePostRequest_(path, payload, method, baseUrl) {
         }
     };
 
-    var response = UrlFetchApp.fetch(url, options);
-    var status = response.getResponseCode();
-    var bodyText = response.getContentText() || "";
+    var response;
+    var status;
+    var bodyText = "";
+    var maxAttempts = 4;
+    for (var attempt = 0; attempt < maxAttempts; attempt++) {
+        response = UrlFetchApp.fetch(url, options);
+        status = response.getResponseCode();
+        bodyText = response.getContentText() || "";
+        if (status !== 429 || attempt === maxAttempts - 1) break;
+        var retryAfterMs = getRetryAfterMs_(response.getAllHeaders());
+        var backoffMs = retryAfterMs || Math.min(8000, Math.pow(2, attempt) * 1000);
+        Logger.log(
+            "Lexware POST request hit rate limit for " + url +
+            " – retry " + (attempt + 1) + "/" + (maxAttempts - 1) +
+            " in " + backoffMs + "ms."
+        );
+        Utilities.sleep(backoffMs);
+    }
 
     var body;
     try {
