@@ -294,7 +294,18 @@ function buildFixkostenVoucherNumber_(params) {
  */
 function findLexwareContactIdByNumber_(vendorNumber) {
     if (!vendorNumber) return null;
+    var rawValue = vendorNumber; // keep original for type logging
     var numberTrimmed = String(vendorNumber).trim();
+
+    // Log the raw cell value type so we can detect unexpected formatting
+    Logger.log(
+        "Fixkosten: Kontaktsuche – Rohwert: '" + rawValue +
+        "' (Typ=" + typeof rawValue + "), bereinigt: '" + numberTrimmed + "'"
+    );
+
+    // Reconstruct the URL for diagnostic logging (mirrors lexwareRequest logic)
+    var debugUrl = LEXWARE_BASE_URL + "/contacts?number=" + encodeURIComponent(numberTrimmed);
+    Logger.log("Fixkosten: Kontaktsuche – GET " + debugUrl);
 
     var result;
     try {
@@ -304,7 +315,24 @@ function findLexwareContactIdByNumber_(vendorNumber) {
         return null;
     }
 
+    // Log HTTP status and key pagination fields
     var body = result.body;
+    var totalElements = (body && body.totalElements !== undefined) ? body.totalElements : "n/a";
+    var totalPages    = (body && body.totalPages    !== undefined) ? body.totalPages    : "n/a";
+    Logger.log(
+        "Fixkosten: Kontaktsuche HTTP " + result.status +
+        " für Nummer '" + numberTrimmed +
+        "' – totalElements=" + totalElements +
+        ", totalPages=" + totalPages
+    );
+
+    // Log truncated raw body so the exact API response is visible
+    var rawBodyStr = body ? JSON.stringify(body) : "null";
+    Logger.log(
+        "Fixkosten: Kontaktsuche – Raw-Body (max 800 Z.): " +
+        rawBodyStr.slice(0, 800) + (rawBodyStr.length > 800 ? "…" : "")
+    );
+
     var contacts = [];
 
     if (Array.isArray(body)) {
@@ -319,9 +347,11 @@ function findLexwareContactIdByNumber_(vendorNumber) {
 
     Logger.log(
         "Fixkosten: Kontaktsuche für Nummer '" + numberTrimmed +
-        "' – API lieferte " + contacts.length + " Treffer. " +
-        "Body-Typ: " + (Array.isArray(body) ? "Array" : (body ? JSON.stringify(Object.keys(body)) : "null")) +
-        (contacts.length > 0 ? " | Erster Kontakt roles: " + JSON.stringify((contacts[0] && contacts[0].roles) || null) : "")
+        "' – " + contacts.length + " Kontakt(e) im content-Array." +
+        (contacts.length > 0
+            ? " | Erster Kontakt id=" + (contacts[0].id || "?") +
+              " roles=" + JSON.stringify((contacts[0] && contacts[0].roles) || null)
+            : "")
     );
 
     // 1. Exact match on roles.vendor.number (preferred – vendor-specific number)
@@ -529,6 +559,7 @@ function createLexwareFixkosten() {
     // This makes the script robust against different column orders and
     // against sheets that were created without the "Lieferantennummer" column.
     var colMap = buildColMap_(sheet);
+    Logger.log("Fixkosten: Spalten-Map: " + JSON.stringify(colMap));
 
     var numCols = sheet.getLastColumn();
     var data = sheet.getRange(2, 1, lastRow - 1, numCols).getValues();
@@ -597,6 +628,14 @@ function createLexwareFixkosten() {
         }
 
         // Look up contact by Lieferantennummer (cached per number)
+        // Log raw cell value before cache/lookup to diagnose format issues
+        var rawLieferantennummerCell = readCell_(row, colMap, "Lieferantennummer", "Lieferant");
+        Logger.log(
+            "Fixkosten: Zeile " + rowNum + " – Rohwert Lieferantennummer: " +
+            JSON.stringify(rawLieferantennummerCell) +
+            " (Typ=" + typeof rawLieferantennummerCell + ")" +
+            ", bereinigt: '" + lieferantennummer + "'"
+        );
         var contactId = contactCache[lieferantennummer];
         if (!contactId) {
             contactId = findLexwareContactIdByNumber_(lieferantennummer);
