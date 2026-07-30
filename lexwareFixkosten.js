@@ -404,6 +404,85 @@ function findLexwareContactIdByNumber_(vendorNumber) {
     return null;
 }
 
+function listLexwareContacts_() {
+    var contacts = [];
+    var page = 0;
+    var pageSize = 100;
+    var totalPages = 1;
+
+    do {
+        var result = lexwareRequest("/contacts", { page: page, size: pageSize });
+        var body = result.body;
+        var pageContacts = [];
+
+        if (Array.isArray(body)) {
+            pageContacts = body;
+        } else if (body && Array.isArray(body.content)) {
+            pageContacts = body.content;
+        } else if (body && Array.isArray(body.contacts)) {
+            pageContacts = body.contacts;
+        } else if (body && body.id) {
+            pageContacts = [body];
+        }
+
+        contacts = contacts.concat(pageContacts);
+        totalPages = (body && body.page && body.page.totalPages !== undefined) ? body.page.totalPages
+                   : (body && body.totalPages !== undefined ? body.totalPages : (pageContacts.length === pageSize ? page + 2 : page + 1));
+        page++;
+    } while (page < totalPages);
+
+    Logger.log(
+        "Fixkosten: Kontaktindex – " + contacts.length +
+        " Kontakt(e) aus " + totalPages + " Seite(n) geladen."
+    );
+
+    return contacts;
+}
+
+function buildLexwareContactNumberIndex_() {
+    var contacts = listLexwareContacts_();
+    var index = {};
+
+    function addNumber(numberValue, contactId, source) {
+        var normalized = String(numberValue || "").trim();
+        if (!normalized || !contactId) return;
+        if (!Object.prototype.hasOwnProperty.call(index, normalized)) {
+            index[normalized] = { id: String(contactId), ambiguous: false, source: source };
+            return;
+        }
+        if (index[normalized].id !== String(contactId)) {
+            index[normalized].ambiguous = true;
+        }
+    }
+
+    for (var i = 0; i < contacts.length; i++) {
+        var contact = contacts[i] || {};
+        var contactId = contact.id;
+        addNumber(contact.number, contactId, "number");
+        if (contact.roles && contact.roles.vendor) addNumber(contact.roles.vendor.number, contactId, "roles.vendor.number");
+        if (contact.roles && contact.roles.customer) addNumber(contact.roles.customer.number, contactId, "roles.customer.number");
+    }
+
+    return index;
+}
+
+function findLexwareContactIdInIndex_(vendorNumber, contactIndex) {
+    if (!vendorNumber || !contactIndex) return null;
+    var numberTrimmed = String(vendorNumber).trim();
+    var match = contactIndex[numberTrimmed];
+    if (!match) return null;
+    if (match.ambiguous) {
+        Logger.log("Fixkosten: Kontaktindex – Lieferantennummer '" + numberTrimmed + "' ist nicht eindeutig.");
+        return null;
+    }
+    Logger.log(
+        "Fixkosten: Kontakt für Nummer '" + numberTrimmed +
+        "' via Kontaktindex gefunden (ID=" + match.id +
+        ", Quelle=" + match.source + ")."
+    );
+    return match.id;
+}
+
 /**
  * Sucht eine Buchungskategorie in Lexware anhand ihres Namens.
  * Ruft GET /v1/posting-categories auf und gibt die UUID der passenden
@@ -575,6 +654,7 @@ function createLexwareFixkosten() {
 
     // Cache contact IDs to avoid repeated API calls for same supplier
     var contactCache = {};
+    var contactIndex = null;
     // Cache posting-category UUIDs to avoid repeated API calls for same category
     var categoryCache = {};
 
@@ -637,6 +717,10 @@ function createLexwareFixkosten() {
             ", bereinigt: '" + lieferantennummer + "'"
         );
         var contactId = contactCache[lieferantennummer];
+        if (!contactId) {
+            if (!contactIndex) contactIndex = buildLexwareContactNumberIndex_();
+            contactId = findLexwareContactIdInIndex_(lieferantennummer, contactIndex);
+        }
         if (!contactId) {
             contactId = findLexwareContactIdByNumber_(lieferantennummer);
             if (contactId) contactCache[lieferantennummer] = contactId;
