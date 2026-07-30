@@ -304,12 +304,12 @@ function findLexwareContactIdByNumber_(vendorNumber) {
     );
 
     // Reconstruct the URL for diagnostic logging (mirrors lexwareRequest logic)
-    var debugUrl = LEXWARE_BASE_URL + "/contacts?number=" + encodeURIComponent(numberTrimmed);
+    var debugUrl = LEXWARE_BASE_URL + "/contacts?vendor=true&number=" + encodeURIComponent(numberTrimmed);
     Logger.log("Fixkosten: Kontaktsuche – GET " + debugUrl);
 
     var result;
     try {
-        result = lexwareRequest("/contacts", { number: numberTrimmed });
+        result = lexwareRequest("/contacts", { vendor: true, number: numberTrimmed });
     } catch (e) {
         Logger.log("Fixkosten: Kontaktsuche fehlgeschlagen für Nummer '" + numberTrimmed + "': " + e.message);
         return null;
@@ -411,7 +411,7 @@ function listLexwareContacts_() {
     var totalPages = 1;
 
     do {
-        var result = lexwareRequest("/contacts", { page: page, size: pageSize });
+        var result = lexwareRequest("/contacts", { page: page, size: pageSize, vendor: true });
         var body = result.body;
         var pageContacts = [];
 
