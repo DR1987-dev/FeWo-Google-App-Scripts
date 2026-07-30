@@ -317,31 +317,57 @@ function findLexwareContactIdByNumber_(vendorNumber) {
         contacts = [body];
     }
 
-    // Match on roles.vendor.number as per the Lexware contacts API response structure.
+    Logger.log(
+        "Fixkosten: Kontaktsuche für Nummer '" + numberTrimmed +
+        "' – API lieferte " + contacts.length + " Treffer. " +
+        "Body-Typ: " + (Array.isArray(body) ? "Array" : (body ? JSON.stringify(Object.keys(body)) : "null")) +
+        (contacts.length > 0 ? " | Erster Kontakt roles: " + JSON.stringify((contacts[0] && contacts[0].roles) || null) : "")
+    );
+
+    // 1. Exact match on roles.vendor.number (preferred – vendor-specific number)
     for (var i = 0; i < contacts.length; i++) {
         var c = contacts[i];
-        var cNum = "";
         if (c.roles && c.roles.vendor) {
-            cNum = String(c.roles.vendor.number || "").trim();
-        }
-        if (cNum === numberTrimmed) {
-            return String(c.id);
+            var vendorNum = String(c.roles.vendor.number || "").trim();
+            if (vendorNum === numberTrimmed) {
+                Logger.log("Fixkosten: Kontakt für Nummer '" + numberTrimmed + "' via roles.vendor.number gefunden (ID=" + c.id + ").");
+                return String(c.id);
+            }
         }
     }
 
-    // If the API returned exactly one result and its vendor number matches, accept it.
+    // 2. Fallback: match on roles.customer.number
+    for (var j = 0; j < contacts.length; j++) {
+        var cc = contacts[j];
+        if (cc.roles && cc.roles.customer) {
+            var customerNum = String(cc.roles.customer.number || "").trim();
+            if (customerNum === numberTrimmed) {
+                Logger.log("Fixkosten: Kontakt für Nummer '" + numberTrimmed + "' via roles.customer.number gefunden (ID=" + cc.id + ").");
+                return String(cc.id);
+            }
+        }
+    }
+
+    // 3. Fallback: match on top-level contact number field
+    for (var k = 0; k < contacts.length; k++) {
+        var ck = contacts[k];
+        var topNum = String(ck.number || "").trim();
+        if (topNum && topNum === numberTrimmed) {
+            Logger.log("Fixkosten: Kontakt für Nummer '" + numberTrimmed + "' via top-level number gefunden (ID=" + ck.id + ").");
+            return String(ck.id);
+        }
+    }
+
+    // 4. Last resort: if the API (which was already queried with ?number=...) returned
+    //    exactly one contact, trust the API filter and accept that result.
     if (contacts.length === 1) {
         var single = contacts[0];
-        var singleNum = (single.roles && single.roles.vendor)
-            ? String(single.roles.vendor.number || "").trim()
-            : "";
-        if (singleNum === numberTrimmed) {
-            Logger.log(
-                "Fixkosten: Kontakt für Nummer '" + numberTrimmed +
-                "' via Einzeltreffer gefunden (ID=" + single.id + ")."
-            );
-            return String(single.id);
-        }
+        Logger.log(
+            "Fixkosten: Kontakt für Nummer '" + numberTrimmed +
+            "' via Einzeltreffer akzeptiert (ID=" + single.id +
+            ", roles=" + JSON.stringify(single.roles || null) + ")."
+        );
+        return String(single.id);
     }
 
     Logger.log("Fixkosten: Kein eindeutiger Kontakt für Lieferantennummer '" + numberTrimmed + "' gefunden.");
