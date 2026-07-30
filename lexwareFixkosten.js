@@ -303,56 +303,79 @@ function findLexwareContactIdByNumber_(vendorNumber) {
         "' (Typ=" + typeof rawValue + "), bereinigt: '" + numberTrimmed + "'"
     );
 
-    // Reconstruct the URL for diagnostic logging (mirrors lexwareRequest logic)
-    var debugUrl = LEXWARE_BASE_URL + "/contacts?vendor=true&number=" + encodeURIComponent(numberTrimmed);
-    Logger.log("Fixkosten: Kontaktsuche – GET " + debugUrl);
+    // ----------------------------------------------------------------
+    // NOTE: The Lexware API's ?number= parameter filters by the general
+    // contact.number field (auto-assigned by Lexware), NOT by the
+    // vendor-role number stored in roles.vendor.number ("Lieferantennummer").
+    // We therefore try two queries:
+    //   1. ?vendor=true&number=X  – matches general contact number for vendors
+    //   2. ?number=X              – same without vendor filter (broader search)
+    // Matching by roles.vendor.number requires searching through contacts
+    // loaded via buildLexwareContactNumberIndex_ instead.
+    // ----------------------------------------------------------------
 
-    var result;
-    try {
-        result = lexwareRequest("/contacts", { vendor: true, number: numberTrimmed });
-    } catch (e) {
-        Logger.log("Fixkosten: Kontaktsuche fehlgeschlagen für Nummer '" + numberTrimmed + "': " + e.message);
-        return null;
-    }
-
-    // Log HTTP status and key pagination fields
-    var body = result.body;
-    var totalElements = (body && body.totalElements !== undefined) ? body.totalElements : "n/a";
-    var totalPages    = (body && body.totalPages    !== undefined) ? body.totalPages    : "n/a";
-    Logger.log(
-        "Fixkosten: Kontaktsuche HTTP " + result.status +
-        " für Nummer '" + numberTrimmed +
-        "' – totalElements=" + totalElements +
-        ", totalPages=" + totalPages
-    );
-
-    // Log truncated raw body so the exact API response is visible
-    var rawBodyStr = body ? JSON.stringify(body) : "null";
-    Logger.log(
-        "Fixkosten: Kontaktsuche – Raw-Body (max 800 Z.): " +
-        rawBodyStr.slice(0, 800) + (rawBodyStr.length > 800 ? "…" : "")
-    );
+    var queriesToTry = [
+        { vendor: true, number: numberTrimmed },
+        { number: numberTrimmed }
+    ];
 
     var contacts = [];
+    for (var qi = 0; qi < queriesToTry.length; qi++) {
+        var queryParams = queriesToTry[qi];
+        var debugUrl = LEXWARE_BASE_URL + "/contacts?" +
+            Object.keys(queryParams).map(function (k) {
+                return encodeURIComponent(k) + "=" + encodeURIComponent(String(queryParams[k]));
+            }).join("&");
+        Logger.log("Fixkosten: Kontaktsuche – GET " + debugUrl);
 
-    if (Array.isArray(body)) {
-        contacts = body;
-    } else if (body && Array.isArray(body.content)) {
-        contacts = body.content;
-    } else if (body && Array.isArray(body.contacts)) {
-        contacts = body.contacts;
-    } else if (body && body.id) {
-        contacts = [body];
+        var result;
+        try {
+            result = lexwareRequest("/contacts", queryParams);
+        } catch (e) {
+            Logger.log("Fixkosten: Kontaktsuche fehlgeschlagen für Nummer '" + numberTrimmed + "': " + e.message);
+            continue;
+        }
+
+        var body = result.body;
+        var totalElements = (body && body.totalElements !== undefined) ? body.totalElements : "n/a";
+        var totalPages    = (body && body.totalPages    !== undefined) ? body.totalPages    : "n/a";
+        Logger.log(
+            "Fixkosten: Kontaktsuche HTTP " + result.status +
+            " für Nummer '" + numberTrimmed +
+            "' – totalElements=" + totalElements +
+            ", totalPages=" + totalPages
+        );
+
+        var rawBodyStr = body ? JSON.stringify(body) : "null";
+        Logger.log(
+            "Fixkosten: Kontaktsuche – Raw-Body (max 800 Z.): " +
+            rawBodyStr.slice(0, 800) + (rawBodyStr.length > 800 ? "…" : "")
+        );
+
+        var pageContacts = [];
+        if (Array.isArray(body)) {
+            pageContacts = body;
+        } else if (body && Array.isArray(body.content)) {
+            pageContacts = body.content;
+        } else if (body && Array.isArray(body.contacts)) {
+            pageContacts = body.contacts;
+        } else if (body && body.id) {
+            pageContacts = [body];
+        }
+
+        Logger.log(
+            "Fixkosten: Kontaktsuche für Nummer '" + numberTrimmed +
+            "' – " + pageContacts.length + " Kontakt(e) im content-Array." +
+            (pageContacts.length > 0
+                ? " | Erster Kontakt id=" + (pageContacts[0].id || "?") +
+                  " number=" + (pageContacts[0].number || "?") +
+                  " roles=" + JSON.stringify((pageContacts[0] && pageContacts[0].roles) || null)
+                : "")
+        );
+
+        contacts = contacts.concat(pageContacts);
+        if (contacts.length > 0) break; // found something in this query, no need for broader fallback
     }
-
-    Logger.log(
-        "Fixkosten: Kontaktsuche für Nummer '" + numberTrimmed +
-        "' – " + contacts.length + " Kontakt(e) im content-Array." +
-        (contacts.length > 0
-            ? " | Erster Kontakt id=" + (contacts[0].id || "?") +
-              " roles=" + JSON.stringify((contacts[0] && contacts[0].roles) || null)
-            : "")
-    );
 
     // 1. Exact match on roles.vendor.number (preferred – vendor-specific number)
     for (var i = 0; i < contacts.length; i++) {
@@ -388,8 +411,7 @@ function findLexwareContactIdByNumber_(vendorNumber) {
         }
     }
 
-    // 4. Last resort: if the API (which was already queried with ?number=...) returned
-    //    exactly one contact, trust the API filter and accept that result.
+    // 4. Last resort: if a query returned exactly one contact, trust the API filter.
     if (contacts.length === 1) {
         var single = contacts[0];
         Logger.log(
@@ -404,14 +426,23 @@ function findLexwareContactIdByNumber_(vendorNumber) {
     return null;
 }
 
-function listLexwareContacts_() {
+/**
+ * Loads pages of contacts from the Lexware API.
+ * @param {Object} extraParams  Additional query parameters (e.g. {vendor:true}).
+ * @return {Array}  Flat list of contact objects.
+ */
+function listLexwareContactsWithParams_(extraParams) {
     var contacts = [];
     var page = 0;
     var pageSize = 100;
     var totalPages = 1;
 
     do {
-        var result = lexwareRequest("/contacts", { page: page, size: pageSize, vendor: true });
+        var params = { page: page, size: pageSize };
+        if (extraParams) {
+            Object.keys(extraParams).forEach(function (k) { params[k] = extraParams[k]; });
+        }
+        var result = lexwareRequest("/contacts", params);
         var body = result.body;
         var pageContacts = [];
 
@@ -431,16 +462,45 @@ function listLexwareContacts_() {
         page++;
     } while (page < totalPages);
 
+    return contacts;
+}
+
+function listLexwareContacts_() {
+    // Primary load: contacts with the vendor role flag set
+    var contacts = listLexwareContactsWithParams_({ vendor: true });
+
     Logger.log(
         "Fixkosten: Kontaktindex – " + contacts.length +
-        " Kontakt(e) aus " + totalPages + " Seite(n) geladen."
+        " Kontakt(e) (vendor=true) geladen."
     );
+
+    // Log a sample contact so the actual field structure is visible in the logs
+    if (contacts.length > 0) {
+        var sample = contacts[0];
+        Logger.log(
+            "Fixkosten: Kontaktindex Beispiel-Kontakt – id=" + (sample.id || "?") +
+            " number=" + JSON.stringify(sample.number) +
+            " roles=" + JSON.stringify(sample.roles || null)
+        );
+    }
 
     return contacts;
 }
 
+/**
+ * Builds an in-memory index mapping every known contact number (from
+ * contact.number, roles.vendor.number, roles.customer.number) to the
+ * corresponding Lexware contact UUID.
+ *
+ * Two passes are performed:
+ *   1. Load only vendor-role contacts (?vendor=true) – fast, covers most cases.
+ *   2. Load ALL contacts (no role filter) – slower fallback that also catches
+ *      contacts that carry a roles.vendor.number but are not flagged as vendors
+ *      in the Lexware contact settings.
+ *
+ * @return {Object}  Map of { number: {id, ambiguous, source} }
+ */
 function buildLexwareContactNumberIndex_() {
-    var contacts = listLexwareContacts_();
     var index = {};
 
     function addNumber(numberValue, contactId, source) {
@@ -455,13 +515,38 @@ function buildLexwareContactNumberIndex_() {
         }
     }
 
-    for (var i = 0; i < contacts.length; i++) {
-        var contact = contacts[i] || {};
-        var contactId = contact.id;
-        addNumber(contact.number, contactId, "number");
-        if (contact.roles && contact.roles.vendor) addNumber(contact.roles.vendor.number, contactId, "roles.vendor.number");
-        if (contact.roles && contact.roles.customer) addNumber(contact.roles.customer.number, contactId, "roles.customer.number");
+    function indexContacts(contacts) {
+        for (var i = 0; i < contacts.length; i++) {
+            var contact = contacts[i] || {};
+            var contactId = contact.id;
+            addNumber(contact.number, contactId, "number");
+            if (contact.roles && contact.roles.vendor) addNumber(contact.roles.vendor.number, contactId, "roles.vendor.number");
+            if (contact.roles && contact.roles.customer) addNumber(contact.roles.customer.number, contactId, "roles.customer.number");
+        }
     }
+
+    // Pass 1: vendor-flagged contacts
+    var vendorContacts = listLexwareContacts_();
+    indexContacts(vendorContacts);
+
+    // Pass 2: all contacts (no role filter) – catches contacts whose vendor
+    // number is stored in roles.vendor.number but the vendor flag is not set.
+    // Skip this pass if pass 1 already loaded a reasonably large set to avoid
+    // unnecessary load; always run if vendor list was empty.
+    var allContacts = listLexwareContactsWithParams_(null);
+    Logger.log(
+        "Fixkosten: Kontaktindex – " + allContacts.length +
+        " Kontakt(e) (alle Rollen) geladen."
+    );
+    indexContacts(allContacts);
+
+    var indexKeys = Object.keys(index);
+    Logger.log(
+        "Fixkosten: Kontaktindex aufgebaut – " + indexKeys.length + " Nummern indexiert." +
+        (indexKeys.length > 0
+            ? " Erste Einträge: " + indexKeys.slice(0, 8).join(", ")
+            : " ACHTUNG: Index ist leer – keine Kontakt-Nummern in Lexware gefunden!")
+    );
 
     return index;
 }
@@ -470,7 +555,15 @@ function findLexwareContactIdInIndex_(vendorNumber, contactIndex) {
     if (!vendorNumber || !contactIndex) return null;
     var numberTrimmed = String(vendorNumber).trim();
     var match = contactIndex[numberTrimmed];
-    if (!match) return null;
+    if (!match) {
+        var allKeys = Object.keys(contactIndex);
+        Logger.log(
+            "Fixkosten: Kontaktindex – Nummer '" + numberTrimmed + "' nicht gefunden." +
+            " Index enthält " + allKeys.length + " Einträge." +
+            (allKeys.length > 0 ? " Erste Einträge: " + allKeys.slice(0, 8).join(", ") : "")
+        );
+        return null;
+    }
     if (match.ambiguous) {
         Logger.log("Fixkosten: Kontaktindex – Lieferantennummer '" + numberTrimmed + "' ist nicht eindeutig.");
         return null;
