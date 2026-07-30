@@ -284,10 +284,10 @@ function buildFixkostenVoucherNumber_(params) {
 // ---- Lexware contact lookup --------------------------------
 
 /**
- * Sucht einen Kontakt in Lexware anhand seiner Lieferantennummer (vendorNumber).
+ * Sucht einen Kontakt in Lexware anhand seiner Lieferantennummer.
  * Lexware speichert Lieferantennummern im Vendor-Role-Objekt des Kontakts
- * (roles.vendor.vendorNumber). Der Endpunkt unterstützt die Filterung per
- * vendorNumber-Abfrageparameter.
+ * (roles.vendor.number). Der Endpunkt unterstützt die Filterung per
+ * number-Abfrageparameter (GET /v1/contacts?number=...).
  *
  * @param  {string} vendorNumber  Lieferantennummer aus Lexware (z. B. "70009")
  * @return {string|null}          Lexware-UUID des Kontakts oder null
@@ -298,7 +298,7 @@ function findLexwareContactIdByNumber_(vendorNumber) {
 
     var result;
     try {
-        result = lexwareRequest("/contacts", { vendorNumber: numberTrimmed });
+        result = lexwareRequest("/contacts", { number: numberTrimmed });
     } catch (e) {
         Logger.log("Fixkosten: Kontaktsuche fehlgeschlagen für Nummer '" + numberTrimmed + "': " + e.message);
         return null;
@@ -317,30 +317,31 @@ function findLexwareContactIdByNumber_(vendorNumber) {
         contacts = [body];
     }
 
-    // Look for exact match in all known vendor-number fields
+    // Match on roles.vendor.number as per the Lexware contacts API response structure.
     for (var i = 0; i < contacts.length; i++) {
         var c = contacts[i];
-        var cNum = String(
-            c.vendorNumber || c.contactNumber || c.number || c.customerNumber || ""
-        ).trim();
-        // Also check the nested vendor role (Lexware contacts API)
-        if (!cNum && c.roles && c.roles.vendor) {
-            cNum = String(
-                c.roles.vendor.vendorNumber || c.roles.vendor.number || ""
-            ).trim();
+        var cNum = "";
+        if (c.roles && c.roles.vendor) {
+            cNum = String(c.roles.vendor.number || "").trim();
         }
         if (cNum === numberTrimmed) {
             return String(c.id);
         }
     }
 
-    // If the API returned exactly one result, accept it (server-side filtering)
+    // If the API returned exactly one result and its vendor number matches, accept it.
     if (contacts.length === 1) {
-        Logger.log(
-            "Fixkosten: Kontakt für Nummer '" + numberTrimmed +
-            "' via Einzeltreffer gefunden (ID=" + contacts[0].id + ")."
-        );
-        return String(contacts[0].id);
+        var single = contacts[0];
+        var singleNum = (single.roles && single.roles.vendor)
+            ? String(single.roles.vendor.number || "").trim()
+            : "";
+        if (singleNum === numberTrimmed) {
+            Logger.log(
+                "Fixkosten: Kontakt für Nummer '" + numberTrimmed +
+                "' via Einzeltreffer gefunden (ID=" + single.id + ")."
+            );
+            return String(single.id);
+        }
     }
 
     Logger.log("Fixkosten: Kein eindeutiger Kontakt für Lieferantennummer '" + numberTrimmed + "' gefunden.");
