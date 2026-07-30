@@ -284,10 +284,10 @@ function buildFixkostenVoucherNumber_(params) {
 // ---- Lexware contact lookup --------------------------------
 
 /**
- * Sucht einen Kontakt in Lexware anhand seiner Lieferantennummer (vendorNumber).
+ * Sucht einen Kontakt in Lexware anhand seiner Lieferantennummer.
  * Lexware speichert Lieferantennummern im Vendor-Role-Objekt des Kontakts
- * (roles.vendor.vendorNumber). Der Endpunkt unterstützt die Filterung per
- * vendorNumber-Abfrageparameter.
+ * (roles.vendor.number). Der Endpunkt unterstützt die Filterung per
+ * number-Abfrageparameter (GET /v1/contacts?number=...).
  *
  * @param  {string} vendorNumber  Lieferantennummer aus Lexware (z. B. "70009")
  * @return {string|null}          Lexware-UUID des Kontakts oder null
@@ -298,7 +298,7 @@ function findLexwareContactIdByNumber_(vendorNumber) {
 
     var result;
     try {
-        result = lexwareRequest("/contacts", { vendorNumber: numberTrimmed });
+        result = lexwareRequest("/contacts", { number: numberTrimmed });
     } catch (e) {
         Logger.log("Fixkosten: Kontaktsuche fehlgeschlagen für Nummer '" + numberTrimmed + "': " + e.message);
         return null;
