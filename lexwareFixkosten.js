@@ -652,6 +652,14 @@ function createLexwareFixkosten() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     if (!ss) throw new Error("No active spreadsheet");
 
+    // Kategorien-Sheet aktualisieren, damit findLexwarePostingCategoryId_()
+    // die aktuellen UUIDs aus dem Sheet lesen kann.
+    try {
+        importLexwareKategorien();
+    } catch (e) {
+        Logger.log("Fixkosten: Kategorien-Import fehlgeschlagen (wird fortgesetzt): " + e.message);
+    }
+
     var sheetName = getFixkostenSheetName_();
     var sheet = ss.getSheetByName(sheetName);
 
