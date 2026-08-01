@@ -727,6 +727,140 @@ function importLexwareFinanzen() {
     };
 }
 
+// ---- Sheet: Buchungskategorien (posting categories) --------
+
+var LEXWARE_KATEGORIEN_SHEET_NAME = "Lexware_Kategorien";
+
+var LEXWARE_KATEGORIEN_HEADERS = [
+    "ID",
+    "Name",
+    "Typ",
+    "API-Typ"
+];
+
+/**
+ * Maps the raw API type string returned by Lexware to a human-readable
+ * German label and a top-level bucket (Einnahmen / Ausgaben / Sonstige).
+ *
+ * Known Lexware posting-category types (case-insensitive):
+ *   revenue / revenues / income / sales / einnahmen  → Einnahmen
+ *   expense / expenses / costs  / aufwand / ausgaben → Ausgaben
+ *   everything else                                  → Sonstige
+ *
+ * @param  {string} apiType  Raw type value from the API.
+ * @return {string}          "Einnahmen", "Ausgaben" or "Sonstige"
+ */
+function mapKategorienTyp_(apiType) {
+    if (!apiType) return "Sonstige";
+    var t = String(apiType).toLowerCase();
+    if (/^(revenue|revenues|income|sales|einnahmen|ertrag|ertraege)$/.test(t)) return "Einnahmen";
+    if (/^(expense|expenses|costs?|cost|aufwand|aufwendungen|ausgaben)$/.test(t)) return "Ausgaben";
+    return "Sonstige";
+}
+
+/**
+ * Fetches all Lexware posting categories from GET /v1/posting-categories and
+ * writes them to the "Lexware_Kategorien" sheet, sorted by Typ then Name.
+ * Rows are matched by category ID to enable incremental updates.
+ *
+ * The Typ column contains "Einnahmen", "Ausgaben" or "Sonstige" so that the
+ * sheet can easily be filtered or used as a lookup reference.
+ *
+ * Override the sheet name via script property LEXWARE_KATEGORIEN_SHEET_NAME.
+ *
+ * @return {{ok:boolean, sheet:string, total:number, inserted:number, updated:number}}
+ */
+function importLexwareKategorien() {
+    var props = PropertiesService.getScriptProperties();
+    var sheetName = (props.getProperty("LEXWARE_KATEGORIEN_SHEET_NAME") || LEXWARE_KATEGORIEN_SHEET_NAME).trim();
+
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) throw new Error("No active spreadsheet");
+
+    var sheet = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
+
+    // Fetch categories
+    var categories = [];
+    try {
+        var result = lexwareRequest("/posting-categories");
+        var body = result.body;
+        if (Array.isArray(body)) {
+            categories = body;
+        } else if (body && Array.isArray(body.content)) {
+            categories = body.content;
+        } else if (body && Array.isArray(body.categories)) {
+            categories = body.categories;
+        } else if (body) {
+            categories = [body];
+        }
+    } catch (e) {
+        Logger.log("Lexware: /posting-categories request failed: " + e.message);
+        return { ok: false, sheet: sheetName, total: 0, inserted: 0, updated: 0, error: e.message };
+    }
+
+    Logger.log("Lexware posting-categories: fetched " + categories.length + " record(s)");
+
+    // Write header row if the sheet is empty
+    if (sheet.getLastRow() === 0) {
+        sheet.appendRow(LEXWARE_KATEGORIEN_HEADERS);
+        sheet.getRange(1, 1, 1, LEXWARE_KATEGORIEN_HEADERS.length).setFontWeight("bold");
+    }
+
+    // Index existing rows by category ID (column 1) for upsert
+    var existingById = {};
+    var lastRow = sheet.getLastRow();
+    if (lastRow > 1) {
+        var existingData = sheet.getRange(2, 1, lastRow - 1, LEXWARE_KATEGORIEN_HEADERS.length).getValues();
+        existingData.forEach(function (row, idx) {
+            var id = String(row[0] || "").trim();
+            if (id) existingById[id] = { rowIndex: idx + 2, data: row };
+        });
+    }
+
+    var newRows = [];
+    var updatedCount = 0;
+
+    categories.forEach(function (cat) {
+        var id = String(cat.id || "").trim();
+        if (!id) return;
+
+        var name = String(cat.name || "").trim();
+        var apiType = String(cat.type || cat.categoryType || "").trim();
+        var typ = mapKategorienTyp_(apiType);
+
+        var row = [id, name, typ, apiType];
+
+        if (existingById[id]) {
+            var existing = existingById[id].data;
+            var changed = row.some(function (val, i) { return String(val) !== String(existing[i]); });
+            if (changed) {
+                sheet.getRange(existingById[id].rowIndex, 1, 1, row.length).setValues([row]);
+                updatedCount++;
+            }
+        } else {
+            newRows.push(row);
+        }
+    });
+
+    if (newRows.length > 0) {
+        sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, LEXWARE_KATEGORIEN_HEADERS.length).setValues(newRows);
+    }
+
+    Logger.log(
+        "Lexware Kategorien import complete: total=" + categories.length +
+        ", inserted=" + newRows.length +
+        ", updated=" + updatedCount
+    );
+
+    return {
+        ok: true,
+        sheet: sheetName,
+        total: categories.length,
+        inserted: newRows.length,
+        updated: updatedCount
+    };
+}
+
 // ---- File upload -------------------------------------------
 
 /**
@@ -787,6 +921,7 @@ function lexwareUploadFile_(blob, fileName) {
  *   4. importLexwareUmsaetze()   – all vouchers (Umsätze)
  *   5. importLexwareKontostand() – bank account balances (Kontostand)
  *   6. importLexwareFinanzen()   – all bank transactions (Finanzen)
+ *   7. importLexwareKategorien() – posting categories (Buchungskategorien)
  */
 function importLexwareAll() {
     importLexwareToSheet();
@@ -799,4 +934,9 @@ function importLexwareAll() {
         Logger.log("importLexwareKontostand skipped: " + e.message);
     }
     importLexwareFinanzen();
+    try {
+        importLexwareKategorien();
+    } catch (e) {
+        Logger.log("importLexwareKategorien skipped: " + e.message);
+    }
 }

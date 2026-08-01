@@ -484,9 +484,12 @@ function findLexwareContactIdInIndex_(vendorNumber, contactIndex) {
 }
 
 /**
- * Sucht eine Buchungskategorie in Lexware anhand ihres Namens.
- * Ruft GET /v1/posting-categories auf und gibt die UUID der passenden
- * Kategorie zurück.
+ * Sucht eine Buchungskategorie anhand ihres Namens.
+ *
+ * Sucht zuerst im lokalen Sheet "Lexware_Kategorien" (Spalte "Name" → Spalte "ID"),
+ * das von importLexwareKategorien() befüllt wird. Nur wenn das Sheet nicht
+ * vorhanden ist oder der Name dort nicht gefunden wird, wird als Fallback
+ * GET /v1/posting-categories aufgerufen.
  *
  * @param  {string} categoryName  Name der Buchungskategorie (z. B. "Reise MA")
  * @return {string|null}          Lexware-UUID der Kategorie oder null
@@ -495,6 +498,35 @@ function findLexwarePostingCategoryId_(categoryName) {
     if (!categoryName) return null;
     var nameStr = String(categoryName).trim();
 
+    // ---- 1. Sheet-Lookup -----------------------------------------------
+    var props = PropertiesService.getScriptProperties();
+    var kategorienSheetName = (props.getProperty("LEXWARE_KATEGORIEN_SHEET_NAME") || "Lexware_Kategorien").trim();
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (ss) {
+        var kategorienSheet = ss.getSheetByName(kategorienSheetName);
+        if (kategorienSheet && kategorienSheet.getLastRow() > 1) {
+            // Header row: ID(1) | Name(2) | Typ(3) | API-Typ(4)
+            var sheetData = kategorienSheet.getRange(2, 1, kategorienSheet.getLastRow() - 1, 2).getValues();
+            for (var s = 0; s < sheetData.length; s++) {
+                if (String(sheetData[s][1] || "").trim() === nameStr) {
+                    var sheetId = String(sheetData[s][0] || "").trim();
+                    if (sheetId) {
+                        Logger.log(
+                            "Fixkosten: Buchungskategorie '" + nameStr +
+                            "' aus Sheet '" + kategorienSheetName + "' gefunden (ID=" + sheetId + ")."
+                        );
+                        return sheetId;
+                    }
+                }
+            }
+            Logger.log(
+                "Fixkosten: Buchungskategorie '" + nameStr +
+                "' nicht im Sheet '" + kategorienSheetName + "' gefunden – versuche API."
+            );
+        }
+    }
+
+    // ---- 2. API-Fallback -----------------------------------------------
     var result;
     try {
         result = lexwareRequest("/posting-categories");
@@ -619,6 +651,14 @@ function createLexwarePurchaseInvoice_(params) {
 function createLexwareFixkosten() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     if (!ss) throw new Error("No active spreadsheet");
+
+    // Kategorien-Sheet aktualisieren, damit findLexwarePostingCategoryId_()
+    // die aktuellen UUIDs aus dem Sheet lesen kann.
+    try {
+        importLexwareKategorien();
+    } catch (e) {
+        Logger.log("Fixkosten: Kategorien-Import fehlgeschlagen (wird fortgesetzt): " + e.message);
+    }
 
     var sheetName = getFixkostenSheetName_();
     var sheet = ss.getSheetByName(sheetName);
