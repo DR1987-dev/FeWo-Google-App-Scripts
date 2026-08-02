@@ -27,6 +27,15 @@
 //  Spalte K  Notiz              – Freitext, wird als Remark in Lexware übernommen
 //  Spalte L  Zuletzt_Gebucht    – wird vom Skript zurückgeschrieben (JJJJ-MM-TT)
 //  Spalte M  Lexware_Beleg_ID   – wird vom Skript zurückgeschrieben (Lexware-UUID)
+//  Spalte N  Beleggruppe        – Gruppenkennung für mehrzeilige Belege (optional):
+//                                  Mehrere Zeilen mit derselben Beleggruppe werden zu
+//                                  einer einzigen Eingangsrechnung mit mehreren Positionen
+//                                  zusammengefasst. Leer = eigenständige Rechnung.
+//                                  Für alle Zeilen einer Gruppe gelten: Lieferantennummer,
+//                                  Rhythmus, Fälligkeitstag/-monat, Konto_IBAN, Aktiv und
+//                                  Notiz der ersten Zeile der Gruppe.
+//                                  Jede Zeile liefert eine eigene Position (Kategorie +
+//                                  Betrag_Brutto + MwSt_Satz).
 //
 // Script Properties (optional):
 //   FIXKOSTEN_SHEET_NAME  – Name des Tabellenblatts (Standard: "Lexware Fixkosten")
@@ -47,7 +56,8 @@ var FIXKOSTEN_HEADERS = [
     "Aktiv",              // J  10
     "Notiz",              // K  11
     "Zuletzt_Gebucht",    // L  12
-    "Lexware_Beleg_ID"    // M  13
+    "Lexware_Beleg_ID",   // M  13
+    "Beleggruppe"         // N  14 (optional; gleiche Kennung → eine Rechnung mit mehreren Positionen)
 ];
 
 // Column indices (1-based for sheet operations)
@@ -64,7 +74,8 @@ var FK_COL = {
     AKTIV:              10,
     NOTIZ:              11,
     ZULETZT_GEBUCHT:    12,
-    LEXWARE_BELEG_ID:   13
+    LEXWARE_BELEG_ID:   13,
+    BELEGGRUPPE:        14
 };
 
 // ---- Dynamic column helpers --------------------------------
@@ -562,24 +573,68 @@ function findLexwarePostingCategoryId_(categoryName) {
 /**
  * Erzeugt eine Eingangsrechnung (purchaseinvoice) in Lexware Office.
  *
+ * Unterstützt sowohl Einzelpositionen (params.betragBrutto / params.mwstSatz /
+ * params.categoryId) als auch mehrere Positionen über params.lineItems.
+ *
  * @param {Object} params
- * @param {string} params.contactId    Lexware-UUID des Lieferanten
- * @param {string} params.lieferantennummer  Lieferantennummer (für Belegnummer-Generierung)
- * @param {string} params.voucherDate  Belegdatum (JJJJ-MM-TT)
- * @param {string} params.dueDate      Fälligkeitsdatum (JJJJ-MM-TT)
- * @param {string} params.kategorieName  Buchungskategoriename (z. B. "Reise MA"), nur für Logging
- * @param {string} params.categoryId   Lexware-UUID der Buchungskategorie (aus /posting-categories)
- * @param {number} params.betragBrutto  Bruttobetrag
- * @param {number} params.mwstSatz     Mehrwertsteuersatz in % (0, 7 oder 19)
- * @param {string} params.konto_iban   IBAN des abbuchenden Kontos (optional, in Notiz)
- * @param {string} params.notiz        Freitext-Notiz (optional)
+ * @param {string} params.contactId         Lexware-UUID des Lieferanten
+ * @param {string} params.lieferantennummer Lieferantennummer (für Belegnummer-Generierung)
+ * @param {string} params.voucherDate       Belegdatum (JJJJ-MM-TT)
+ * @param {string} params.dueDate           Fälligkeitsdatum (JJJJ-MM-TT)
+ * @param {string} [params.konto_iban]      IBAN des abbuchenden Kontos (optional, in Notiz)
+ * @param {string} [params.notiz]           Freitext-Notiz (optional)
+ *
+ * Einzelposition (rückwärtskompatibel):
+ * @param {string} [params.kategorieName]   Buchungskategoriename (nur für Logging)
+ * @param {string} [params.categoryId]      Lexware-UUID der Buchungskategorie
+ * @param {number} [params.betragBrutto]    Bruttobetrag
+ * @param {number} [params.mwstSatz]        Mehrwertsteuersatz in % (0, 7 oder 19)
+ *
+ * Mehrere Positionen (bevorzugt):
+ * @param {Array}  [params.lineItems]       Array von Positionen; jede hat:
+ *   @param {number} lineItems[].betragBrutto
+ *   @param {number} lineItems[].mwstSatz
+ *   @param {string} [lineItems[].categoryId]
+ *   @param {string} [lineItems[].kategorieName]  (nur für Logging)
+ *
  * @return {string}  Lexware-UUID des erstellten Belegs
  */
 function createLexwarePurchaseInvoice_(params) {
-    var taxRatePercent = Number(params.mwstSatz) || 0;
-    var grossAmount = round2(Number(params.betragBrutto) || 0);
-    var taxAmount = round2(grossAmount - grossAmount / (1 + taxRatePercent / 100));
-    var voucherNumber = buildFixkostenVoucherNumber_(params);
+    // Normalize to lineItems array (supports both single-item legacy and multi-item call)
+    var lineItems = params.lineItems;
+    if (!lineItems || !lineItems.length) {
+        lineItems = [{
+            betragBrutto: params.betragBrutto,
+            mwstSatz:     params.mwstSatz,
+            categoryId:   params.categoryId,
+            kategorieName: params.kategorieName
+        }];
+    }
+
+    // Build voucherItems and accumulate totals
+    var totalGross = 0;
+    var totalTax   = 0;
+    var voucherItems = [];
+
+    lineItems.forEach(function (item) {
+        var gross   = round2(Number(item.betragBrutto) || 0);
+        var taxRate = Number(item.mwstSatz) || 0;
+        var tax     = round2(gross - gross / (1 + taxRate / 100));
+        totalGross  = round2(totalGross + gross);
+        totalTax    = round2(totalTax + tax);
+
+        var vi = { amount: gross, taxAmount: tax, taxRatePercent: taxRate };
+        if (item.categoryId) vi.categoryId = item.categoryId;
+        voucherItems.push(vi);
+    });
+
+    // For the voucher number use the category of the first (or only) item
+    var voucherNumber = buildFixkostenVoucherNumber_({
+        voucherDate:      params.voucherDate,
+        lieferantennummer: params.lieferantennummer,
+        kategorieName:    lineItems.length === 1 ? (lineItems[0].kategorieName || "") : "",
+        betragBrutto:     totalGross
+    });
 
     // Build remark: include IBAN of debit account if provided
     var remark = params.notiz ? String(params.notiz).trim() : "";
@@ -588,31 +643,16 @@ function createLexwarePurchaseInvoice_(params) {
         remark = remark ? remark + " | " + ibanNote : ibanNote;
     }
 
-    // Voucher item as required by the Lexware POST /v1/vouchers API:
-    //   amount          – gross amount of the line item
-    //   taxAmount       – tax portion of amount
-    //   taxRatePercent  – tax rate in %
-    //   categoryId      – UUID from GET /v1/posting-categories
-    var voucherItem = {
-        amount: grossAmount,
-        taxAmount: taxAmount,
-        taxRatePercent: taxRatePercent
-    };
-
-    if (params.categoryId) {
-        voucherItem.categoryId = params.categoryId;
-    }
-
     var payload = {
         type: "purchaseinvoice",
         voucherNumber: voucherNumber,
         voucherDate: params.voucherDate,
         dueDate: params.dueDate,
-        totalGrossAmount: grossAmount,
-        totalTaxAmount: taxAmount,
+        totalGrossAmount: totalGross,
+        totalTaxAmount: totalTax,
         taxType: "gross",
         contactId: params.contactId,
-        voucherItems: [ voucherItem ]
+        voucherItems: voucherItems
     };
 
     if (remark) {
@@ -626,10 +666,14 @@ function createLexwarePurchaseInvoice_(params) {
         (body && (body.id || body.voucherId || body.uuid)) || ""
     );
 
+    var categoryLog = lineItems.length === 1
+        ? (lineItems[0].kategorieName || "–")
+        : lineItems.map(function (li) { return li.kategorieName || "–"; }).join(", ");
+
     Logger.log(
-        "Fixkosten: Beleg erstellt – Kategorie " + params.kategorieName +
-        ", Brutto=" + grossAmount +
-        ", MwSt=" + taxRatePercent + "%" +
+        "Fixkosten: Beleg erstellt – " + lineItems.length + " Position(en)" +
+        " [" + categoryLog + "]" +
+        ", Brutto=" + totalGross +
         ", ID=" + voucherId
     );
 
@@ -642,7 +686,14 @@ function createLexwarePurchaseInvoice_(params) {
  * Liest das Tabellenblatt "Lexware Fixkosten" und erzeugt für jeden
  * fälligen, aktiven Eintrag eine Eingangsrechnung in Lexware.
  *
- * Zurückgeschrieben werden:
+ * Zeilen mit derselben nichtleeren Beleggruppe (Spalte N) werden zu
+ * einer einzigen Eingangsrechnung mit mehreren Positionen zusammengefasst.
+ * Dabei bestimmt die erste Zeile der Gruppe: Lieferantennummer, Rhythmus,
+ * Fälligkeitstag/-monat, Konto_IBAN, Aktiv und Notiz.
+ * Jede Zeile der Gruppe liefert eine Position: Kategorie, Betrag_Brutto,
+ * MwSt_Satz.
+ *
+ * Zurückgeschrieben werden (alle Zeilen einer Gruppe):
  *   - Spalte L (Zuletzt_Gebucht)  – heutiges Datum
  *   - Spalte M (Lexware_Beleg_ID) – UUID des erstellten Belegs
  *
@@ -675,8 +726,6 @@ function createLexwareFixkosten() {
     }
 
     // Build dynamic column map from actual sheet headers (row 1).
-    // This makes the script robust against different column orders and
-    // against sheets that were created without the "Lieferantennummer" column.
     var colMap = buildColMap_(sheet);
     Logger.log("Fixkosten: Spalten-Map: " + JSON.stringify(colMap));
 
@@ -692,39 +741,48 @@ function createLexwareFixkosten() {
     var zuletztGebuchtCol = writeCol_(colMap, "Zuletzt_Gebucht");
     var lexwareBelegIdCol = writeCol_(colMap, "Lexware_Beleg_ID", "Lexware_Beleg_I");
 
-    // Cache contact IDs to avoid repeated API calls for same supplier
+    // Cache contact IDs and category UUIDs to avoid repeated API calls
     var contactCache = {};
     var contactIndex = null;
-    // Cache posting-category UUIDs to avoid repeated API calls for same category
     var categoryCache = {};
+
+    // ---- Pass 1: collect candidate rows ---------------------------------
+    // Each entry: { rowNum, beleggruppe, kategorieName, lieferant,
+    //               lieferantennummer, betragBrutto, mwstSatz, rhythmus,
+    //               faelligkeitstag, faelligkeitsmonat, kontoIban, notiz,
+    //               zuletztGebucht }
+    var candidates = [];
 
     for (var i = 0; i < data.length; i++) {
         var row = data[i];
         var rowNum = i + 2; // 1-based sheet row
 
-        var kategorieName      = String(readCell_(row, colMap, "Kategorie", "Kategorie_Nr")              || "").trim();
-        var lieferant          = String(readCell_(row, colMap, "Lieferant")                             || "").trim();
-        // Fall back to "Lieferant" when a dedicated "Lieferantennummer" column is absent
-        var lieferantennummer  = String(readCell_(row, colMap, "Lieferantennummer", "Lieferant")        || "").trim();
-        var betragBrutto       = Number(readCell_(row, colMap, "Betrag_Brutto"))                        || 0;
-        var mwstSatz           = Number(readCell_(row, colMap, "MwSt_Satz"))                            || 0;
-        var rhythmus           = String(readCell_(row, colMap, "Rhythmus")                              || "").trim();
-        var faelligkeitstag    = readCell_(row, colMap, "Fälligkeitstag");
-        var faelligkeitsmonat  = readCell_(row, colMap, "Fälligkeitsmonat");
-        var kontoIban          = String(readCell_(row, colMap, "Konto_IBAN")                            || "").trim();
-        var aktiv              = readCell_(row, colMap, "Aktiv");
-        var notiz              = String(readCell_(row, colMap, "Notiz")                                 || "").trim();
-        var zuletztGebucht     = String(readCell_(row, colMap, "Zuletzt_Gebucht")                       || "").trim();
+        var kategorieName     = String(readCell_(row, colMap, "Kategorie", "Kategorie_Nr")       || "").trim();
+        var lieferant         = String(readCell_(row, colMap, "Lieferant")                       || "").trim();
+        var lieferantennummer = String(readCell_(row, colMap, "Lieferantennummer", "Lieferant")  || "").trim();
+        var betragBrutto      = Number(readCell_(row, colMap, "Betrag_Brutto"))                  || 0;
+        var mwstSatz          = Number(readCell_(row, colMap, "MwSt_Satz"))                      || 0;
+        var rhythmus          = String(readCell_(row, colMap, "Rhythmus")                        || "").trim();
+        var faelligkeitstag   = readCell_(row, colMap, "Fälligkeitstag");
+        var faelligkeitsmonat = readCell_(row, colMap, "Fälligkeitsmonat");
+        var kontoIban         = String(readCell_(row, colMap, "Konto_IBAN")                      || "").trim();
+        var aktiv             = readCell_(row, colMap, "Aktiv");
+        var notiz             = String(readCell_(row, colMap, "Notiz")                           || "").trim();
+        var zuletztGebucht    = String(readCell_(row, colMap, "Zuletzt_Gebucht")                 || "").trim();
+        var beleggruppe       = String(readCell_(row, colMap, "Beleggruppe")                     || "").trim();
 
-        // Skip empty or inactive rows
+        // Skip empty rows
         if (!kategorieName && !lieferantennummer) { skipped++; continue; }
+
+        // Skip inactive rows
         if (aktiv === false || String(aktiv).toUpperCase() === "FALSE" || aktiv === 0) {
             Logger.log("Fixkosten: Zeile " + rowNum + " (Kat. " + kategorieName + ") – inaktiv, übersprungen.");
             skipped++;
             continue;
         }
 
-        // Validate required fields
+        // Validate required fields for standalone rows.
+        // For grouped rows the lieferantennummer of the first row is used; log here for traceability.
         if (!lieferantennummer) {
             Logger.log(
                 "Fixkosten: Zeile " + rowNum + " (Kat. " + kategorieName + ")" +
@@ -739,95 +797,161 @@ function createLexwareFixkosten() {
             continue;
         }
 
-        // Check due date
-        var dueInfo = isFixkostenDue_(rhythmus, faelligkeitstag, faelligkeitsmonat, zuletztGebucht, now);
+        candidates.push({
+            rowNum:            rowNum,
+            beleggruppe:       beleggruppe,
+            kategorieName:     kategorieName,
+            lieferant:         lieferant,
+            lieferantennummer: lieferantennummer,
+            betragBrutto:      betragBrutto,
+            mwstSatz:          mwstSatz,
+            rhythmus:          rhythmus,
+            faelligkeitstag:   faelligkeitstag,
+            faelligkeitsmonat: faelligkeitsmonat,
+            kontoIban:         kontoIban,
+            notiz:             notiz,
+            zuletztGebucht:    zuletztGebucht
+        });
+    }
+
+    // ---- Pass 2: group candidates ----------------------------------------
+    // Rows without a Beleggruppe are each their own group (standalone).
+    // Rows sharing the same non-empty Beleggruppe form a single invoice.
+    var groupMap = {}; // beleggruppe string → [candidate, ...]
+    var groupOrder = []; // preserves insertion order for deterministic processing
+
+    candidates.forEach(function (c) {
+        if (c.beleggruppe) {
+            if (!Object.prototype.hasOwnProperty.call(groupMap, c.beleggruppe)) {
+                groupMap[c.beleggruppe] = [];
+                groupOrder.push(c.beleggruppe);
+            }
+            groupMap[c.beleggruppe].push(c);
+        } else {
+            // Standalone: use a unique key so it does not collide with named groups
+            var standaloneKey = "__standalone_row_" + c.rowNum;
+            groupMap[standaloneKey] = [c];
+            groupOrder.push(standaloneKey);
+        }
+    });
+
+    // ---- Pass 3: process each group --------------------------------------
+    groupOrder.forEach(function (key) {
+        var group = groupMap[key];
+        var first = group[0]; // invoice header comes from the first row of the group
+
+        // For due-date check: use the latest Zuletzt_Gebucht across all rows
+        // to prevent re-booking a group where only some rows were already written back.
+        var latestZuletztGebucht = group.reduce(function (max, c) {
+            if (!c.zuletztGebucht) return max;
+            return (!max || c.zuletztGebucht > max) ? c.zuletztGebucht : max;
+        }, "");
+
+        // Check due date (use first row's schedule)
+        var dueInfo = isFixkostenDue_(
+            first.rhythmus,
+            first.faelligkeitstag,
+            first.faelligkeitsmonat,
+            latestZuletztGebucht,
+            now
+        );
         if (!dueInfo) {
-            Logger.log("Fixkosten: Zeile " + rowNum + " (Kat. " + kategorieName + ") – noch nicht fällig.");
-            skipped++;
-            continue;
+            var groupLabel = first.beleggruppe || ("Zeile " + first.rowNum);
+            Logger.log("Fixkosten: Gruppe '" + groupLabel + "' – noch nicht fällig.");
+            skipped += group.length;
+            return;
         }
 
         // Look up contact by Lieferantennummer (cached per number)
-        // Log raw cell value before cache/lookup to diagnose format issues
-        var rawLieferantennummerCell = readCell_(row, colMap, "Lieferantennummer", "Lieferant");
+        var rawLieferantennummerCell = readCell_(data[first.rowNum - 2], colMap, "Lieferantennummer", "Lieferant");
         Logger.log(
-            "Fixkosten: Zeile " + rowNum + " – Rohwert Lieferantennummer: " +
+            "Fixkosten: Zeile " + first.rowNum + " – Rohwert Lieferantennummer: " +
             JSON.stringify(rawLieferantennummerCell) +
             " (Typ=" + typeof rawLieferantennummerCell + ")" +
-            ", bereinigt: '" + lieferantennummer + "'"
+            ", bereinigt: '" + first.lieferantennummer + "'"
         );
-        var contactId = contactCache[lieferantennummer];
+        var contactId = contactCache[first.lieferantennummer];
         if (!contactId) {
             if (!contactIndex) contactIndex = buildLexwareContactNumberIndex_();
-            contactId = findLexwareContactIdInIndex_(lieferantennummer, contactIndex);
+            contactId = findLexwareContactIdInIndex_(first.lieferantennummer, contactIndex);
         }
         if (!contactId) {
-            contactId = findLexwareContactIdByNumber_(lieferantennummer);
-            if (contactId) contactCache[lieferantennummer] = contactId;
+            contactId = findLexwareContactIdByNumber_(first.lieferantennummer);
+            if (contactId) contactCache[first.lieferantennummer] = contactId;
         }
         if (!contactId) {
             Logger.log(
-                "Fixkosten: Zeile " + rowNum + " (Kat. " + kategorieName + ")" +
-                " – Lieferantennummer '" + lieferantennummer +
-                "' (" + (lieferant || "?") + ") nicht in Lexware gefunden, übersprungen."
+                "Fixkosten: Zeile " + first.rowNum + " (Kat. " + first.kategorieName + ")" +
+                " – Lieferantennummer '" + first.lieferantennummer +
+                "' (" + (first.lieferant || "?") + ") nicht in Lexware gefunden, übersprungen."
             );
-            errors++;
-            continue;
+            errors += group.length;
+            return;
         }
 
-        // Look up posting category UUID (cached per category number)
-        var categoryId = null;
-        if (kategorieName) {
-            if (Object.prototype.hasOwnProperty.call(categoryCache, kategorieName)) {
-                categoryId = categoryCache[kategorieName];
-            } else {
-                categoryId = findLexwarePostingCategoryId_(kategorieName);
-                categoryCache[kategorieName] = categoryId;
+        // Resolve category UUID for each line item (cached per name)
+        var lineItems = group.map(function (c) {
+            var categoryId = null;
+            if (c.kategorieName) {
+                if (Object.prototype.hasOwnProperty.call(categoryCache, c.kategorieName)) {
+                    categoryId = categoryCache[c.kategorieName];
+                } else {
+                    categoryId = findLexwarePostingCategoryId_(c.kategorieName);
+                    categoryCache[c.kategorieName] = categoryId;
+                }
+                if (!categoryId) {
+                    Logger.log(
+                        "Fixkosten: Zeile " + c.rowNum + " (Kat. " + c.kategorieName + ")" +
+                        " – Buchungskategorie nicht gefunden, Position wird ohne Kategorie erstellt."
+                    );
+                }
             }
-            if (!categoryId) {
-                Logger.log(
-                    "Fixkosten: Zeile " + rowNum + " (Kat. " + kategorieName + ")" +
-                    " – Buchungskategorie nicht gefunden, Beleg wird ohne Kategorie erstellt."
-                );
-            }
-        }
+            return {
+                betragBrutto:  c.betragBrutto,
+                mwstSatz:      c.mwstSatz,
+                categoryId:    categoryId,
+                kategorieName: c.kategorieName
+            };
+        });
 
-        // Create purchase invoice
+        // Create the purchase invoice (one invoice, potentially many line items)
         try {
             var voucherId = createLexwarePurchaseInvoice_({
-                contactId:   contactId,
-                voucherDate: dueInfo.voucherDate,
-                dueDate:     dueInfo.dueDate,
-                kategorieName: kategorieName,
-                lieferantennummer: lieferantennummer,
-                categoryId:  categoryId,
-                betragBrutto: betragBrutto,
-                mwstSatz:    mwstSatz,
-                konto_iban:  kontoIban,
-                notiz:       notiz
+                contactId:         contactId,
+                voucherDate:       dueInfo.voucherDate,
+                dueDate:           dueInfo.dueDate,
+                lieferantennummer: first.lieferantennummer,
+                konto_iban:        first.kontoIban,
+                notiz:             first.notiz,
+                lineItems:         lineItems
             });
 
-            // Write back booking date and voucher ID
-            if (zuletztGebuchtCol > 0) {
-                sheet.getRange(rowNum, zuletztGebuchtCol).setValue(formatDate_(now));
-            }
-            if (lexwareBelegIdCol > 0) {
-                sheet.getRange(rowNum, lexwareBelegIdCol).setValue(voucherId);
-            }
+            // Write back booking date and voucher ID to ALL rows of this group
+            group.forEach(function (c) {
+                if (zuletztGebuchtCol > 0) {
+                    sheet.getRange(c.rowNum, zuletztGebuchtCol).setValue(formatDate_(now));
+                }
+                if (lexwareBelegIdCol > 0) {
+                    sheet.getRange(c.rowNum, lexwareBelegIdCol).setValue(voucherId);
+                }
+            });
 
+            var groupLabel = first.beleggruppe || ("Zeile " + first.rowNum);
             Logger.log(
-                "Fixkosten: ✅ Zeile " + rowNum + " (Kat. " + kategorieName + ")" +
+                "Fixkosten: ✅ Gruppe '" + groupLabel + "'" +
+                " (" + group.length + " Position(en))" +
                 " – Beleg erstellt: " + voucherId
             );
             created++;
         } catch (e) {
+            var groupLabelErr = first.beleggruppe || ("Zeile " + first.rowNum);
             Logger.log(
-                "Fixkosten: ❌ Zeile " + rowNum + " (Kat. " + kategorieName + ")" +
+                "Fixkosten: ❌ Gruppe '" + groupLabelErr + "'" +
                 " – Fehler beim Erstellen: " + e.message
             );
-            errors++;
+            errors += group.length;
         }
-    }
+    });
 
     Logger.log(
         "Fixkosten abgeschlossen: erstellt=" + created +
