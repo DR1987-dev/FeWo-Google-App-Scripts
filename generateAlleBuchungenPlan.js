@@ -208,9 +208,9 @@ function generateAlleBuchungenPlan() {
     lexwareUmsaetzeData.forEach((r, i) => {
       // Spalten (0-basiert): A=Zeilen_ID, B=Beleg_ID, C=Belegtyp, D=Status,
       //   E=Belegnummer, F=Belegdatum, G=Fälligkeitsdatum, H=Kontakt,
-      //   I=Gesamtbetrag, J=Währung, K=Bemerkung, L=Position,
-      //   M=Pos_Kategorie, N=Pos_Betrag_Brutto, O=Pos_MwSt_Satz,
-      //   P=Pos_MwSt_Betrag, Q=Konto
+      //   I=Kontaktnummer, J=Gesamtbetrag, K=Währung, L=Bemerkung, M=Position,
+      //   N=Pos_Kategorie, O=Pos_Betrag_Brutto, P=Pos_MwSt_Satz,
+      //   Q=Pos_MwSt_Betrag, R=Konto
       const belegtyp = String(r[2] || "").toLowerCase().trim();
       if (belegtyp !== "salesinvoice" && belegtyp !== "purchaseinvoice") return;
 
@@ -220,10 +220,10 @@ function generateAlleBuchungenPlan() {
       if (isNaN(belegdatum.getTime()) || belegdatum < START_2026) return;
 
       const kontakt   = String(r[7]  || "");
-      const kategorie = String(r[12] || "");
-      const posBetragStr = String(r[13] || "0").replace(",", ".");
+      const kategorie = String(r[13] || "");
+      const posBetragStr = String(r[14] || "0").replace(",", ".");
       const posBetrag = parseFloat(posBetragStr) || 0;
-      const konto = String(r[16] || "").trim() || "Mietenkonto";
+      const konto = String(r[17] || "").trim() || "Mietenkonto";
 
       const kostenart = kategorie || kontakt;
       const betrag = belegtyp === "salesinvoice"
