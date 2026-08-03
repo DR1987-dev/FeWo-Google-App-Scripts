@@ -345,15 +345,332 @@ function importLexwareAusgaben() {
     return lexwareImportVouchersToSheet_("purchaseinvoice", sheetName);
 }
 
+// ---- Konto-Zuordnung (account mapping for Umsätze) ---------
+
+var LEXWARE_KONTO_ZUORDNUNG_DEFAULT_SHEET_NAME = "Lexware_Konto_Zuordnung";
+
+var LEXWARE_KONTO_ZUORDNUNG_HEADERS = [
+    "Kategorie",  // A  Buchungskategoriename aus Lexware
+    "Konto"       // B  Kontonummer oder Kontobezeichnung
+];
+
+/**
+ * Erstellt das Tabellenblatt "Lexware_Konto_Zuordnung" mit den
+ * erforderlichen Spaltenüberschriften, falls es noch nicht existiert.
+ * Bestehende Daten (Zuordnungen) bleiben erhalten.
+ *
+ * Pflege: Trage in Spalte A den exakten Buchungskategorienamen und in
+ * Spalte B die gewünschte Kontobezeichnung ein. Während des Umsatz-Imports
+ * wird die Zuordnung automatisch in die Spalte "Konto" geschrieben.
+ *
+ * Override für den Blattnamen: Script Property LEXWARE_KONTO_ZUORDNUNG_SHEET_NAME
+ *
+ * @return {{ok:boolean, sheet:string}}
+ */
+function setupLexwareKontoZuordnungSheet() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) throw new Error("No active spreadsheet");
+    var props = PropertiesService.getScriptProperties();
+    var sheetName = (props.getProperty("LEXWARE_KONTO_ZUORDNUNG_SHEET_NAME") ||
+        LEXWARE_KONTO_ZUORDNUNG_DEFAULT_SHEET_NAME).trim();
+    var sheet = ss.getSheetByName(sheetName);
+    if (!sheet) {
+        sheet = ss.insertSheet(sheetName);
+        Logger.log("Konto-Zuordnung: Blatt '" + sheetName + "' erstellt.");
+    }
+    if (sheet.getLastRow() === 0) {
+        sheet.appendRow(LEXWARE_KONTO_ZUORDNUNG_HEADERS);
+        sheet.getRange(1, 1, 1, LEXWARE_KONTO_ZUORDNUNG_HEADERS.length).setFontWeight("bold");
+        Logger.log("Konto-Zuordnung: Spaltenüberschriften gesetzt.");
+    } else {
+        Logger.log("Konto-Zuordnung: Blatt existiert bereits, keine Änderung an der Kopfzeile.");
+    }
+    return { ok: true, sheet: sheetName };
+}
+
+/**
+ * Liest das Konto-Zuordnung-Sheet und gibt eine Lookup-Map zurück.
+ *
+ * @return {Object}  { kategorieName.toLowerCase() → konto }
+ */
+function buildKontoZuordnungIndex_() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var props = PropertiesService.getScriptProperties();
+    var sheetName = (props.getProperty("LEXWARE_KONTO_ZUORDNUNG_SHEET_NAME") ||
+        LEXWARE_KONTO_ZUORDNUNG_DEFAULT_SHEET_NAME).trim();
+    var sheet = ss.getSheetByName(sheetName);
+    var index = {};
+    if (!sheet || sheet.getLastRow() < 2) return index;
+    var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues();
+    data.forEach(function (row) {
+        var name = String(row[0] || "").trim();
+        var konto = String(row[1] || "").trim();
+        if (name) index[name.toLowerCase()] = konto;
+    });
+    return index;
+}
+
+// ---- Umsätze with line items --------------------------------
+
+var LEXWARE_UMSAETZE_DETAIL_HEADERS = [
+    "Zeilen_ID",          // A  Eindeutiger Schlüssel: {voucherID}_{posNr}
+    "Beleg_ID",           // B  Lexware-UUID des Belegs
+    "Belegtyp",           // C
+    "Status",             // D
+    "Belegnummer",        // E
+    "Belegdatum",         // F
+    "Fälligkeitsdatum",   // G
+    "Kontakt",            // H
+    "Gesamtbetrag",       // I  Gesamtbetrag des Belegs
+    "Währung",            // J
+    "Bemerkung",          // K
+    "Position",           // L  Positionsnummer (1, 2, 3 …)
+    "Pos_Kategorie",      // M  Buchungskategoriename dieser Position
+    "Pos_Betrag_Brutto",  // N  Bruttobetrag dieser Position
+    "Pos_MwSt_Satz",      // O  Steuersatz % dieser Position
+    "Pos_MwSt_Betrag",    // P  Steuerbetrag dieser Position
+    "Konto"               // Q  Konto aus dem Blatt Lexware_Konto_Zuordnung
+];
+
+/**
+ * Liest das Lexware_Kategorien-Sheet und gibt eine Lookup-Map zurück.
+ *
+ * @return {Object}  { categoryId → categoryName }
+ */
+function buildKategorienIdToNameIndex_() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var props = PropertiesService.getScriptProperties();
+    var sheetName = (props.getProperty("LEXWARE_KATEGORIEN_SHEET_NAME") ||
+        LEXWARE_KATEGORIEN_SHEET_NAME).trim();
+    var sheet = ss.getSheetByName(sheetName);
+    var index = {};
+    if (!sheet || sheet.getLastRow() < 2) return index;
+    var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues();
+    data.forEach(function (row) {
+        var id = String(row[0] || "").trim();
+        var name = String(row[1] || "").trim();
+        if (id) index[id] = name;
+    });
+    return index;
+}
+
+/**
+ * Ruft die vollständigen Belegdetails (inkl. voucherItems) von GET /vouchers/{id} ab.
+ *
+ * @param {string} voucherId  Lexware-UUID des Belegs.
+ * @return {{status:number, body:*}}
+ */
+function lexwareGetVoucherDetail_(voucherId) {
+    return lexwareRequest("/vouchers/" + encodeURIComponent(voucherId));
+}
+
+/**
+ * Holt alle Belege (optional gefiltert nach voucherType), ruft für jeden Beleg
+ * die vollständigen Details inkl. Positionen (voucherItems) ab und schreibt
+ * eine Zeile pro Position in das Zielblatt.
+ *
+ * Zeilenkennung (Spalte A "Zeilen_ID"): "{voucherId}_{posNr}"
+ * Die Konto-Spalte wird aus dem Blatt "Lexware_Konto_Zuordnung" befüllt
+ * (Buchungskategoriename → Konto).
+ *
+ * Falls ein Beleg keine Positionen liefert, wird eine zusammenfassende
+ * Zeile mit dem Gesamtbetrag eingefügt.
+ *
+ * Beim ersten Lauf nach einer Formatumstellung (altes Format mit Spalte A = "ID")
+ * wird das Sheet automatisch geleert und neu aufgebaut.
+ *
+ * @param {string|null} voucherType  API-Filterwert oder null für alle Typen.
+ * @param {string} sheetName         Name des Zielblatts.
+ * @return {{ok:boolean, sheet:string, total:number, inserted:number, updated:number}}
+ */
+function lexwareImportVouchersWithLineItemsToSheet_(voucherType, sheetName) {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) throw new Error("No active spreadsheet");
+
+    var sheet = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
+
+    // Migrate from old single-row format (column A header = "ID")
+    var firstHeader = sheet.getLastRow() > 0 ? String(sheet.getRange(1, 1).getValue() || "").trim() : "";
+    if (sheet.getLastRow() === 0 || firstHeader === "ID") {
+        sheet.clearContents();
+        sheet.appendRow(LEXWARE_UMSAETZE_DETAIL_HEADERS);
+        sheet.getRange(1, 1, 1, LEXWARE_UMSAETZE_DETAIL_HEADERS.length).setFontWeight("bold");
+        if (firstHeader === "ID") {
+            Logger.log("Lexware Umsätze: altes Format erkannt – Blatt '" + sheetName + "' neu aufgebaut.");
+        }
+    }
+
+    // Build lookup tables
+    var kontoZuordnung = buildKontoZuordnungIndex_();
+    var kategorienIndex = buildKategorienIdToNameIndex_();
+
+    // Index existing rows by Zeilen_ID (column A)
+    var existingById = {};
+    var lastRow = sheet.getLastRow();
+    if (lastRow > 1) {
+        var existingData = sheet.getRange(2, 1, lastRow - 1, LEXWARE_UMSAETZE_DETAIL_HEADERS.length).getValues();
+        existingData.forEach(function (row, idx) {
+            var id = String(row[0] || "").trim();
+            if (id) existingById[id] = { rowIndex: idx + 2, data: row };
+        });
+    }
+
+    // Fetch voucherlist (all pages)
+    var allVouchers = [];
+    var page = 0;
+    var pageSize = 100;
+    var totalPages = 1;
+
+    do {
+        var listResult = lexwareGetVoucherlist_(voucherType || null, page, pageSize);
+        var listBody = listResult.body;
+        if (!listBody || !listBody.content) {
+            Logger.log("Lexware voucherlist (details): unerwartete Antwort auf Seite " + page +
+                ": " + JSON.stringify(listBody));
+            break;
+        }
+        allVouchers = allVouchers.concat(listBody.content);
+        var pageInfo = listBody.page || {};
+        totalPages = pageInfo.totalPages !== undefined ? pageInfo.totalPages
+                   : (listBody.totalPages !== undefined ? listBody.totalPages : 1);
+        page++;
+    } while (page < totalPages);
+
+    Logger.log(
+        "Lexware Umsätze (details) (" + (voucherType || "all") + "): " +
+        allVouchers.length + " Belege auf " + totalPages + " Seite(n) geholt"
+    );
+
+    var newRows = [];
+    var updatedCount = 0;
+
+    allVouchers.forEach(function (v) {
+        var voucherId = String(v.id || "").trim();
+        if (!voucherId) return;
+
+        // Summary fields available from voucherlist
+        var belegtyp          = v.voucherType || "";
+        var status            = v.voucherStatus || "";
+        var belegnummer       = v.voucherNumber || "";
+        var belegdatum        = v.voucherDate ? String(v.voucherDate).slice(0, 10) : "";
+        var faelligkeitsdatum = v.dueDate ? String(v.dueDate).slice(0, 10) : "";
+        var kontakt           = v.contactName || "";
+        var gesamtbetrag      = v.totalAmount !== undefined ? v.totalAmount : "";
+        var waehrung          = v.currency || "EUR";
+        var bemerkung         = v.remark || "";
+
+        // Fetch full voucher detail to get line items
+        var voucherItems = [];
+        try {
+            var detailResult = lexwareGetVoucherDetail_(voucherId);
+            var detail = detailResult.body;
+            if (detail && Array.isArray(detail.voucherItems)) {
+                voucherItems = detail.voucherItems;
+            } else if (detail && Array.isArray(detail.lineItems)) {
+                voucherItems = detail.lineItems;
+            }
+        } catch (e) {
+            Logger.log("Lexware Umsätze: Detail-Abruf für Beleg " + voucherId + " fehlgeschlagen: " + e.message);
+        }
+        // Courtesy pause between individual detail requests
+        Utilities.sleep(100);
+
+        // If the detail endpoint returned no items, fall back to a single summary row
+        if (voucherItems.length === 0) {
+            voucherItems = [{ _summaryFallback: true }];
+        }
+
+        voucherItems.forEach(function (item, idx) {
+            var posNr  = idx + 1;
+            var rowKey = voucherId + "_" + posNr;
+
+            // Resolve category name: prefer direct field, then ID lookup
+            var categoryName = "";
+            if (!item._summaryFallback) {
+                categoryName = String(
+                    item.categoryName || item.name || item.description || ""
+                ).trim();
+                if (!categoryName) {
+                    var categoryId = String(item.categoryId || "").trim();
+                    if (categoryId) categoryName = kategorienIndex[categoryId] || "";
+                }
+            }
+
+            var posGross = item._summaryFallback ? gesamtbetrag
+                         : (item.amount !== undefined ? item.amount : "");
+            var posRate  = item._summaryFallback ? "" : (item.taxRatePercent !== undefined ? item.taxRatePercent : "");
+            var posTax   = item._summaryFallback ? "" : (item.taxAmount !== undefined ? item.taxAmount : "");
+
+            // Look up account from Konto-Zuordnung
+            var konto = "";
+            if (categoryName) {
+                konto = kontoZuordnung[categoryName.toLowerCase()] || "";
+            }
+
+            var row = [
+                rowKey,
+                voucherId,
+                belegtyp,
+                status,
+                belegnummer,
+                belegdatum,
+                faelligkeitsdatum,
+                kontakt,
+                gesamtbetrag,
+                waehrung,
+                bemerkung,
+                posNr,
+                categoryName,
+                posGross,
+                posRate,
+                posTax,
+                konto
+            ];
+
+            if (existingById[rowKey]) {
+                var existing = existingById[rowKey].data;
+                var changed = row.some(function (val, i) { return String(val) !== String(existing[i]); });
+                if (changed) {
+                    sheet.getRange(existingById[rowKey].rowIndex, 1, 1, row.length).setValues([row]);
+                    updatedCount++;
+                }
+            } else {
+                newRows.push(row);
+            }
+        });
+    });
+
+    if (newRows.length > 0) {
+        sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length,
+            LEXWARE_UMSAETZE_DETAIL_HEADERS.length).setValues(newRows);
+    }
+
+    Logger.log(
+        "Lexware Umsätze (details) import abgeschlossen: Belege=" + allVouchers.length +
+        ", eingefügt=" + newRows.length +
+        ", aktualisiert=" + updatedCount
+    );
+
+    return {
+        ok: true,
+        sheet: sheetName,
+        total: allVouchers.length,
+        inserted: newRows.length,
+        updated: updatedCount
+    };
+}
+
 /**
  * Imports all vouchers (Umsätze) into the "Lexware_Umsaetze" sheet.
+ * Each voucher line item is written as a separate row. The "Konto" column
+ * is filled from the "Lexware_Konto_Zuordnung" mapping sheet.
  * Uses GET /v1/voucherlist?voucherType=any&voucherStatus=any.
  * Override the sheet name with the script property LEXWARE_UMSAETZE_SHEET_NAME.
  */
 function importLexwareUmsaetze() {
     var props = PropertiesService.getScriptProperties();
     var sheetName = (props.getProperty("LEXWARE_UMSAETZE_SHEET_NAME") || "Lexware_Umsaetze").trim();
-    return lexwareImportVouchersToSheet_(null, sheetName);
+    return lexwareImportVouchersWithLineItemsToSheet_(null, sheetName);
 }
 
 // ---- Finance / Bank accounts & transactions ----------------
@@ -915,19 +1232,30 @@ function lexwareUploadFile_(blob, fileName) {
 
 /**
  * Runs all Lexware imports:
- *   1. importLexwareToSheet()    – outgoing invoices (Rechnungen)
- *   2. importLexwareEinnahmen()  – income vouchers (Einnahmen)
- *   3. importLexwareAusgaben()   – expense vouchers (Ausgaben)
- *   4. importLexwareUmsaetze()   – all vouchers (Umsätze)
- *   5. importLexwareKontostand() – bank account balances (Kontostand)
- *   6. importLexwareFinanzen()   – all bank transactions (Finanzen)
- *   7. importLexwareKategorien() – posting categories (Buchungskategorien)
- *   8. syncLexwareKundenSheet()  – contacts cache (Kunden & Lieferanten)
+ *   1. importLexwareToSheet()             – outgoing invoices (Rechnungen)
+ *   2. importLexwareEinnahmen()           – income vouchers (Einnahmen)
+ *   3. importLexwareAusgaben()            – expense vouchers (Ausgaben)
+ *   4. importLexwareUmsaetze()            – all vouchers with line items (Umsätze)
+ *   5. importLexwareKontostand()          – bank account balances (Kontostand)
+ *   6. importLexwareFinanzen()            – all bank transactions (Finanzen)
+ *   7. importLexwareKategorien()          – posting categories (Buchungskategorien)
+ *   8. syncLexwareKundenSheet()           – contacts cache (Kunden & Lieferanten)
+ *   9. setupLexwareKontoZuordnungSheet()  – ensures Konto-Zuordnung sheet exists
  */
 function importLexwareAll() {
     importLexwareToSheet();
     importLexwareEinnahmen();
     importLexwareAusgaben();
+    try {
+        importLexwareKategorien();
+    } catch (e) {
+        Logger.log("importLexwareKategorien skipped: " + e.message);
+    }
+    try {
+        setupLexwareKontoZuordnungSheet();
+    } catch (e) {
+        Logger.log("setupLexwareKontoZuordnungSheet skipped: " + e.message);
+    }
     importLexwareUmsaetze();
     try {
         importLexwareKontostand();
@@ -935,11 +1263,6 @@ function importLexwareAll() {
         Logger.log("importLexwareKontostand skipped: " + e.message);
     }
     importLexwareFinanzen();
-    try {
-        importLexwareKategorien();
-    } catch (e) {
-        Logger.log("importLexwareKategorien skipped: " + e.message);
-    }
     try {
         syncLexwareKundenSheet();
     } catch (e) {
