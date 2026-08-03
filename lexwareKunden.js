@@ -20,6 +20,7 @@
 //  Spalte D  Lieferantennummer – Nummer in der Lieferanten-Rolle (falls vorhanden)
 //  Spalte E  Name              – Anzeigename (Firmenname oder Personenname)
 //  Spalte F  Typ               – Kunde | Lieferant | Kunde/Lieferant | Kontakt
+//  Spalte G  Notiz             – Freitextnotiz am Kontakt (contact.note)
 //
 // Integration:
 //   buildLexwareContactNumberIndex_() (in lexwareFixkosten.js) verwendet
@@ -39,7 +40,8 @@ var LEXWARE_KUNDEN_HEADERS = [
     "Kundennummer",       // C  3  (roles.customer.number)
     "Lieferantennummer",  // D  4  (roles.vendor.number)
     "Name",               // E  5  (Anzeigename: Firmenname oder Vor-/Nachname)
-    "Typ"                 // F  6  (Kunde | Lieferant | Kunde/Lieferant | Kontakt)
+    "Typ",                // F  6  (Kunde | Lieferant | Kunde/Lieferant | Kontakt)
+    "Notiz"               // G  7  (Freitextnotiz am Kontakt, contact.note)
 ];
 
 // ---- Config ------------------------------------------------
@@ -218,8 +220,9 @@ function syncLexwareKundenSheet() {
                 : hasCustomer             ? "Kunde"
                 : hasVendor               ? "Lieferant"
                 :                          "Kontakt";
+        var notiz = String(contact.note || "").trim();
 
-        var row = [uuid, nummer, kundennummer, lieferantennum, name, typ];
+        var row = [uuid, nummer, kundennummer, lieferantennum, name, typ, notiz];
 
         if (existingById[uuid]) {
             var existing = existingById[uuid].data;
