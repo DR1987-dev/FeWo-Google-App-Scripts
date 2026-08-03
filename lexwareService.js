@@ -601,10 +601,10 @@ function lexwareImportVouchersWithLineItemsToSheet_(voucherType, sheetName) {
             var posRate  = item._summaryFallback ? "" : (item.taxRatePercent !== undefined ? item.taxRatePercent : "");
             var posTax   = item._summaryFallback ? "" : (item.taxAmount !== undefined ? item.taxAmount : "");
 
-            // Look up account from Konto-Zuordnung
-            var konto = "";
+            // Look up account from Konto-Zuordnung; fall back to "Mietenkonto"
+            var konto = "Mietenkonto";
             if (categoryName) {
-                konto = kontoZuordnung[categoryName.toLowerCase()] || "";
+                konto = kontoZuordnung[categoryName.toLowerCase()] || "Mietenkonto";
             }
 
             var row = [
