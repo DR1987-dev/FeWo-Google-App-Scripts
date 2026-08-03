@@ -922,6 +922,7 @@ function lexwareUploadFile_(blob, fileName) {
  *   5. importLexwareKontostand() – bank account balances (Kontostand)
  *   6. importLexwareFinanzen()   – all bank transactions (Finanzen)
  *   7. importLexwareKategorien() – posting categories (Buchungskategorien)
+ *   8. syncLexwareKundenSheet()  – contacts cache (Kunden & Lieferanten)
  */
 function importLexwareAll() {
     importLexwareToSheet();
@@ -938,5 +939,10 @@ function importLexwareAll() {
         importLexwareKategorien();
     } catch (e) {
         Logger.log("importLexwareKategorien skipped: " + e.message);
+    }
+    try {
+        syncLexwareKundenSheet();
+    } catch (e) {
+        Logger.log("syncLexwareKundenSheet skipped: " + e.message);
     }
 }

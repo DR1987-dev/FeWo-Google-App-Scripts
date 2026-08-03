@@ -451,6 +451,20 @@ function listLexwareContacts_() {
 }
 
 function buildLexwareContactNumberIndex_() {
+    // 1. Versuche, den Index aus dem lokalen Kunden-Sheet zu erstellen.
+    //    syncLexwareKundenSheet() muss vorher aufgerufen worden sein (z. B.
+    //    durch importLexwareAll()), damit das Sheet aktuell ist.
+    var sheetIndex = buildContactIndexFromKundenSheet_();
+    if (sheetIndex && Object.keys(sheetIndex).length > 0) {
+        Logger.log(
+            "Fixkosten: Kontaktindex – " + Object.keys(sheetIndex).length +
+            " Einträge aus Kunden-Sheet (kein API-Aufruf erforderlich)."
+        );
+        return sheetIndex;
+    }
+
+    // 2. Fallback: Kontakte per API abrufen (wenn das Sheet leer / nicht vorhanden ist).
+    Logger.log("Fixkosten: Kunden-Sheet leer oder nicht vorhanden – lade Kontakte per API.");
     var contacts = listLexwareContacts_();
     var index = {};
 
