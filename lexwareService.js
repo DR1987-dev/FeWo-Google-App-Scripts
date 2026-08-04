@@ -430,6 +430,34 @@ function buildKontoZuordnungIndex_() {
     return result;
 }
 
+function extractLieferantennummer_(voucherSummary, voucherDetail) {
+    var candidates = [];
+
+    function pushCandidate(value) {
+        if (value === null || value === undefined) return;
+        var trimmed = String(value).trim();
+        if (trimmed) candidates.push(trimmed);
+    }
+
+    function pushVendorRoleNumbers(contact) {
+        if (!contact || !contact.roles || !contact.roles.vendor) return;
+        var vendorRole = contact.roles.vendor;
+        pushCandidate(vendorRole.number);
+        pushCandidate(vendorRole.vendorNumber);
+        pushCandidate(vendorRole.contactNumber);
+    }
+
+    pushVendorRoleNumbers(voucherDetail && voucherDetail.contact);
+    pushVendorRoleNumbers(voucherSummary && voucherSummary.contact);
+
+    pushCandidate(voucherDetail && voucherDetail.vendorNumber);
+    pushCandidate(voucherDetail && voucherDetail.contactNumber);
+    pushCandidate(voucherSummary && voucherSummary.vendorNumber);
+    pushCandidate(voucherSummary && voucherSummary.contactNumber);
+
+    return candidates.length ? candidates[0] : "";
+}
+
 // ---- Umsätze with line items --------------------------------
 
 var LEXWARE_UMSAETZE_DETAIL_HEADERS = [
@@ -591,10 +619,7 @@ function lexwareImportVouchersWithLineItemsToSheet_(voucherType, sheetName) {
             } else if (detail && Array.isArray(detail.lineItems)) {
                 voucherItems = detail.lineItems;
             }
-            // Extract vendor number (Lieferantennummer) from detail response
-            if (detail && detail.contact && detail.contact.roles && detail.contact.roles.vendor) {
-                lieferantennummer = String(detail.contact.roles.vendor.number || "").trim();
-            }
+            lieferantennummer = extractLieferantennummer_(v, detail);
         } catch (e) {
             Logger.log("Lexware Umsätze: Detail-Abruf für Beleg " + voucherId + " fehlgeschlagen: " + e.message);
         }
@@ -631,8 +656,8 @@ function lexwareImportVouchersWithLineItemsToSheet_(voucherType, sheetName) {
             //   1. Lieferantennummer + Kategorie (composite key)
             //   2. Nur Lieferantennummer
             //   3. Nur Kategorie
-            //   4. Fallback "Mietenkonto"
-            var konto = "Mietenkonto";
+            //   4. Fallback: purchaseinvoice => "WEG Konto", sonst "Mietenkonto"
+            var konto = belegtyp === "purchaseinvoice" ? "WEG Konto" : "Mietenkonto";
             var categoryKey = categoryName ? categoryName.toLowerCase() : "";
             if (lieferantennummer && categoryKey &&
                 kontoZuordnung.composite[lieferantennummer + "|" + categoryKey]) {
