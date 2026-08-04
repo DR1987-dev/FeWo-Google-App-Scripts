@@ -110,7 +110,6 @@ function generateAlleBuchungenPlan() {
   const sheetKontostart = requireSheet(ss, "Kontostartwerte");
   const sheetUmbuchungen = requireSheet(ss, "Umbuchungen");
   const sheetOutput = requireSheet(ss, "AlleBuchungenPlan");
-  const sheetLexwareImport = ss.getSheetByName("Lexware Umsatz Import");
 
   sheetOutput.clearContents();
   sheetOutput.appendRow(["Kostenart", "Buchungskonto", "Datum", "Betrag", "Kumuliert", "Monatsstartwert", "Monatsendwert"]);
@@ -198,34 +197,44 @@ function generateAlleBuchungenPlan() {
   });
 
   // -------------------------------
-  // 5b️⃣ Lexware Umsatz Import (ab 2026)
+  // 5b️⃣ Lexware Umsatz Import (ab 2026) – eine Zeile pro Position mit vorberechnetem Konto
   const START_2026 = new Date(2026, 0, 1);
   let lexwareUmsaetze = [];
   let letztesDatumLexware = null;
 
-  if (sheetLexwareImport) {
-    const lexwareImportData = sheetLexwareImport.getDataRange().getValues().slice(1);
-    lexwareImportData.forEach((r, i) => {
-      const belegtyp = String(r[1] || "").toLowerCase().trim();
+  const sheetLexwareUmsaetze = ss.getSheetByName("Lexware Umsatz Import");
+  if (sheetLexwareUmsaetze) {
+    const lexwareUmsaetzeData = sheetLexwareUmsaetze.getDataRange().getValues().slice(1);
+    lexwareUmsaetzeData.forEach((r, i) => {
+      // Spalten (0-basiert): A=Zeilen_ID, B=Beleg_ID, C=Belegtyp, D=Status,
+      //   E=Belegnummer, F=Belegdatum, G=Fälligkeitsdatum, H=Kontakt,
+      //   I=Lieferantennummer, J=Gesamtbetrag, K=Währung, L=Bemerkung, M=Position,
+      //   N=Pos_Kategorie, O=Pos_Betrag_Brutto, P=Pos_MwSt_Satz,
+      //   Q=Pos_MwSt_Betrag, R=Konto
+      const belegtyp = String(r[2] || "").toLowerCase().trim();
       if (belegtyp !== "salesinvoice" && belegtyp !== "purchaseinvoice") return;
 
-      const rawDatum = r[4];
+      const rawDatum = r[5];
       if (!rawDatum) return;
       const belegdatum = new Date(rawDatum);
       if (isNaN(belegdatum.getTime()) || belegdatum < START_2026) return;
 
-      const kontakt = String(r[6] || "");
-      const gesamtbetragStr = String(r[7] || "0").replace(",", ".");
-      const gesamtbetrag = parseFloat(gesamtbetragStr) || 0;
+      const kontakt   = String(r[7]  || "");
+      const kategorie = String(r[13] || "");
+      const posBetragStr = String(r[14] || "0").replace(",", ".");
+      const posBetrag = parseFloat(posBetragStr) || 0;
+      const konto = String(r[17] || "").trim() || "Mietenkonto";
 
+      const kostenart = kategorie || kontakt;
       const betrag = belegtyp === "salesinvoice"
-        ? Math.abs(gesamtbetrag)
-        : -Math.abs(gesamtbetrag);
+        ? Math.abs(posBetrag)
+        : -Math.abs(posBetrag);
 
       lexwareUmsaetze.push({
-        Buchungstext: kontakt,
-        Datum: belegdatum,
-        Betrag: Number(betrag.toFixed(2))
+        Buchungstext:  kostenart,
+        Datum:         belegdatum,
+        Betrag:        Number(betrag.toFixed(2)),
+        Buchungskonto: konto
       });
 
       if (!letztesDatumLexware || belegdatum > letztesDatumLexware) {
@@ -233,7 +242,7 @@ function generateAlleBuchungenPlan() {
       }
 
       Logger.log(
-        `📦 Lexware ${i + 2}: "${kontakt}", Typ=${belegtyp}, Betrag=${betrag}`
+        `📦 Lexware Umsatz Import ${i + 2}: "${kostenart}", Typ=${belegtyp}, Betrag=${betrag}, Konto=${konto}`
       );
     });
     Logger.log(
@@ -312,30 +321,16 @@ function generateAlleBuchungenPlan() {
     Logger.log(`➕ Manuelle Buchung: ${m.Kostenart} ${m.Betrag} → ${m.Buchungskonto}`);
   });
 
-  // 7c️⃣ Lexware Umsatz Import Buchungen (ab 2026)
+  // 7c️⃣ Lexware Umsatz Import Buchungen (ab 2026) – Konto ist bereits vorberechnet
   lexwareUmsaetze.forEach(lx => {
-    let konto = "Mietenkonto"; // Fallback
-
-    const fix = findePassendeFixkosten(lx, fixkosten);
-    if (fix) {
-      konto = fix.Buchungskonto;
-      Logger.log(`🔁 Lexware → Fixkosten-Zuordnung: '${lx.Buchungstext}' → ${konto}`);
-    }
-
-    const key = buildDateTextKey(lx.Datum, lx.Buchungstext);
-    if (importZuordnung[key]) {
-      konto = importZuordnung[key];
-      Logger.log(`📝 Exakte Import-Zuordnung für Lexware: '${lx.Buchungstext}' → ${konto}`);
-    }
-
     alleBuchungen.push({
       Kostenart: lx.Buchungstext,
-      Buchungskonto: konto,
+      Buchungskonto: lx.Buchungskonto,
       Datum: lx.Datum,
       Betrag: lx.Betrag,
       Quelle: "LexwareImport"
     });
-    Logger.log(`✅ Lexware-Buchung: ${lx.Buchungstext} ${lx.Betrag} → ${konto}`);
+    Logger.log(`✅ Lexware-Buchung: ${lx.Buchungstext} ${lx.Betrag} → ${lx.Buchungskonto}`);
   });
 
   // 7d️⃣ Fixkosten Forecast
