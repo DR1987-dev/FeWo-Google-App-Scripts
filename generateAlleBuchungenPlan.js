@@ -223,7 +223,7 @@ function generateAlleBuchungenPlan() {
       const kategorie = String(r[13] || "");
       const posBetragStr = String(r[14] || "0").replace(",", ".");
       const posBetrag = parseFloat(posBetragStr) || 0;
-      const konto = String(r[17] || "").trim() || "Mietenkonto";
+      const konto = String(r[17] || "").trim() || (belegtyp === "purchaseinvoice" ? "WEG Konto" : "Mietenkonto");
 
       const kostenart = kategorie || kontakt;
       const betrag = belegtyp === "salesinvoice"
