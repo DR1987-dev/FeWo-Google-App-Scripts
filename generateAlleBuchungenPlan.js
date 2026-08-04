@@ -197,12 +197,12 @@ function generateAlleBuchungenPlan() {
   });
 
   // -------------------------------
-  // 5b️⃣ Lexware_Umsaetze (ab 2026) – eine Zeile pro Position mit vorberechnetem Konto
+  // 5b️⃣ Lexware Umsatz Import (ab 2026) – eine Zeile pro Position mit vorberechnetem Konto
   const START_2026 = new Date(2026, 0, 1);
   let lexwareUmsaetze = [];
   let letztesDatumLexware = null;
 
-  const sheetLexwareUmsaetze = ss.getSheetByName("Lexware_Umsaetze");
+  const sheetLexwareUmsaetze = ss.getSheetByName("Lexware Umsatz Import");
   if (sheetLexwareUmsaetze) {
     const lexwareUmsaetzeData = sheetLexwareUmsaetze.getDataRange().getValues().slice(1);
     lexwareUmsaetzeData.forEach((r, i) => {
@@ -242,11 +242,11 @@ function generateAlleBuchungenPlan() {
       }
 
       Logger.log(
-        `📦 Lexware_Umsaetze ${i + 2}: "${kostenart}", Typ=${belegtyp}, Betrag=${betrag}, Konto=${konto}`
+        `📦 Lexware Umsatz Import ${i + 2}: "${kostenart}", Typ=${belegtyp}, Betrag=${betrag}, Konto=${konto}`
       );
     });
     Logger.log(
-      `📌 Lexware_Umsaetze geladen: ${lexwareUmsaetze.length}, letztes Datum: ` +
+      `📌 Lexware Umsatz Import geladen: ${lexwareUmsaetze.length}, letztes Datum: ` +
       (letztesDatumLexware
         ? Utilities.formatDate(letztesDatumLexware, Session.getScriptTimeZone(), "yyyy-MM-dd")
         : "–")
@@ -321,7 +321,7 @@ function generateAlleBuchungenPlan() {
     Logger.log(`➕ Manuelle Buchung: ${m.Kostenart} ${m.Betrag} → ${m.Buchungskonto}`);
   });
 
-  // 7c️⃣ Lexware_Umsaetze Buchungen (ab 2026) – Konto ist bereits vorberechnet
+  // 7c️⃣ Lexware Umsatz Import Buchungen (ab 2026) – Konto ist bereits vorberechnet
   lexwareUmsaetze.forEach(lx => {
     alleBuchungen.push({
       Kostenart: lx.Buchungstext,

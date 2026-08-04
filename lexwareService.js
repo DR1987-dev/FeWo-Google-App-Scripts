@@ -698,7 +698,7 @@ function lexwareImportVouchersWithLineItemsToSheet_(voucherType, sheetName) {
 }
 
 /**
- * Imports all vouchers (Umsätze) into the "Lexware_Umsaetze" sheet.
+ * Imports all vouchers (Umsätze) into the "Lexware Umsatz Import" sheet.
  * Each voucher line item is written as a separate row. The "Konto" column
  * is filled from the "Lexware_Konto_Zuordnung" mapping sheet.
  * Uses GET /v1/voucherlist?voucherType=any&voucherStatus=any.
@@ -706,7 +706,7 @@ function lexwareImportVouchersWithLineItemsToSheet_(voucherType, sheetName) {
  */
 function importLexwareUmsaetze() {
     var props = PropertiesService.getScriptProperties();
-    var sheetName = (props.getProperty("LEXWARE_UMSAETZE_SHEET_NAME") || "Lexware_Umsaetze").trim();
+    var sheetName = (props.getProperty("LEXWARE_UMSAETZE_SHEET_NAME") || "Lexware Umsatz Import").trim();
     return lexwareImportVouchersWithLineItemsToSheet_(null, sheetName);
 }
 
