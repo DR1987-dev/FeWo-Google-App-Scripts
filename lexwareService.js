@@ -350,10 +350,9 @@ function importLexwareAusgaben() {
 var LEXWARE_KONTO_ZUORDNUNG_DEFAULT_SHEET_NAME = "Lexware_Konto_Zuordnung";
 
 var LEXWARE_KONTO_ZUORDNUNG_HEADERS = [
-    "Kategorie",      // A  Buchungskategoriename aus Lexware (optional, wenn Kontaktnummer+Belegtyp gesetzt)
-    "Kontaktnummer",  // B  Kontaktnummer des Belegs (optional, wenn Kategorie gesetzt)
-    "Belegtyp",       // C  Belegtyp (z. B. salesinvoice / purchaseinvoice; optional)
-    "Konto"           // D  Kontonummer oder Kontobezeichnung
+    "Lieferantennummer",  // A  Lieferantennummer des Belegs (optional, wenn nur Kategorie gesetzt)
+    "Kategorie",          // B  Buchungskategoriename aus Lexware (optional, wenn nur Lieferantennummer gesetzt)
+    "Konto"               // C  Kontonummer oder Kontobezeichnung
 ];
 
 /**
@@ -362,15 +361,14 @@ var LEXWARE_KONTO_ZUORDNUNG_HEADERS = [
  * Bestehende Daten (Zuordnungen) bleiben erhalten.
  *
  * Pflege:
- *   - Spalte A (Kategorie): exakter Buchungskategoriename für kategoriebasierte Zuordnung.
- *   - Spalte B (Kontaktnummer): Kontaktnummer des Belegs für kontaktbasierte Zuordnung.
- *   - Spalte C (Belegtyp): Belegtyp (z. B. salesinvoice / purchaseinvoice), optional.
- *   - Spalte D (Konto): gewünschte Kontobezeichnung.
+ *   - Spalte A (Lieferantennummer): Lieferantennummer des Belegs.
+ *   - Spalte B (Kategorie): exakter Buchungskategoriename aus Lexware.
+ *   - Spalte C (Konto): gewünschte Kontobezeichnung.
  *
  * Priorität bei der Zuordnung:
- *   1. Kombination Kontaktnummer + Belegtyp (wenn beide Spalten B und C gefüllt)
- *   2. Nur Kontaktnummer (Spalte B gesetzt, Spalte C leer)
- *   3. Kategorie (Spalte A gesetzt)
+ *   1. Kombination Lieferantennummer + Kategorie (beide Spalten A und B gefüllt) – spezifischste Regel
+ *   2. Nur Lieferantennummer (Spalte A gesetzt, Spalte B leer)
+ *   3. Nur Kategorie (Spalte B gesetzt, Spalte A leer)
  *
  * Override für den Blattnamen: Script Property LEXWARE_KONTO_ZUORDNUNG_SHEET_NAME
  *
@@ -398,14 +396,14 @@ function setupLexwareKontoZuordnungSheet() {
 }
 
 /**
- * Liest das Konto-Zuordnung-Sheet und gibt ein Objekt mit zwei Lookup-Maps zurück.
+ * Liest das Konto-Zuordnung-Sheet und gibt ein Objekt mit Lookup-Maps zurück.
  *
  * Lookup-Strategien (in Prioritätsreihenfolge):
- *   1. composite["kontaktnummer|belegtyp"] → konto  (Spalten B + C beide gefüllt)
- *   2. contactOnly["kontaktnummer"]        → konto  (nur Spalte B gefüllt, C leer)
- *   3. category["kategorieName.toLowerCase()"] → konto  (Spalte A gefüllt)
+ *   1. composite["lieferantennummer|kategorie"] → konto  (Spalten A + B beide gefüllt)
+ *   2. vendorOnly["lieferantennummer"]          → konto  (nur Spalte A gefüllt, B leer)
+ *   3. category["kategorie.toLowerCase()"]      → konto  (nur Spalte B gefüllt, A leer)
  *
- * @return {{composite:Object, contactOnly:Object, category:Object}}
+ * @return {{composite:Object, vendorOnly:Object, category:Object}}
  */
 function buildKontoZuordnungIndex_() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -413,19 +411,18 @@ function buildKontoZuordnungIndex_() {
     var sheetName = (props.getProperty("LEXWARE_KONTO_ZUORDNUNG_SHEET_NAME") ||
         LEXWARE_KONTO_ZUORDNUNG_DEFAULT_SHEET_NAME).trim();
     var sheet = ss.getSheetByName(sheetName);
-    var result = { composite: {}, contactOnly: {}, category: {} };
+    var result = { composite: {}, vendorOnly: {}, category: {} };
     if (!sheet || sheet.getLastRow() < 2) return result;
-    var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 4).getValues();
+    var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 3).getValues();
     data.forEach(function (row) {
-        var kategorie      = String(row[0] || "").trim();
-        var kontaktnummer  = String(row[1] || "").trim();
-        var belegtyp       = String(row[2] || "").trim().toLowerCase();
-        var konto          = String(row[3] || "").trim();
+        var lieferantennummer = String(row[0] || "").trim();
+        var kategorie         = String(row[1] || "").trim();
+        var konto             = String(row[2] || "").trim();
         if (!konto) return;
-        if (kontaktnummer && belegtyp) {
-            result.composite[kontaktnummer + "|" + belegtyp] = konto;
-        } else if (kontaktnummer) {
-            result.contactOnly[kontaktnummer] = konto;
+        if (lieferantennummer && kategorie) {
+            result.composite[lieferantennummer + "|" + kategorie.toLowerCase()] = konto;
+        } else if (lieferantennummer) {
+            result.vendorOnly[lieferantennummer] = konto;
         } else if (kategorie) {
             result.category[kategorie.toLowerCase()] = konto;
         }
@@ -444,7 +441,7 @@ var LEXWARE_UMSAETZE_DETAIL_HEADERS = [
     "Belegdatum",         // F
     "Fälligkeitsdatum",   // G
     "Kontakt",            // H
-    "Kontaktnummer",      // I  Kontaktnummer des Belegs (Nummer / Kundennummer / Lieferantennummer)
+    "Lieferantennummer",  // I  Lieferantennummer des Belegs (contact.roles.vendor.number)
     "Gesamtbetrag",       // J  Gesamtbetrag des Belegs
     "Währung",            // K
     "Bemerkung",          // L
@@ -583,9 +580,9 @@ function lexwareImportVouchersWithLineItemsToSheet_(voucherType, sheetName) {
         var waehrung          = v.currency || "EUR";
         var bemerkung         = v.remark || "";
 
-        // Fetch full voucher detail to get line items and contact number
+        // Fetch full voucher detail to get line items and vendor number
         var voucherItems = [];
-        var kontaktnummer = "";
+        var lieferantennummer = "";
         try {
             var detailResult = lexwareGetVoucherDetail_(voucherId);
             var detail = detailResult.body;
@@ -594,18 +591,9 @@ function lexwareImportVouchersWithLineItemsToSheet_(voucherType, sheetName) {
             } else if (detail && Array.isArray(detail.lineItems)) {
                 voucherItems = detail.lineItems;
             }
-            // Extract contact number from detail response
-            if (detail && detail.contact) {
-                kontaktnummer = String(
-                    detail.contact.number ||
-                    (detail.contact.roles && detail.contact.roles.customer
-                        ? detail.contact.roles.customer.number || ""
-                        : "") ||
-                    (detail.contact.roles && detail.contact.roles.vendor
-                        ? detail.contact.roles.vendor.number || ""
-                        : "") ||
-                    ""
-                ).trim();
+            // Extract vendor number (Lieferantennummer) from detail response
+            if (detail && detail.contact && detail.contact.roles && detail.contact.roles.vendor) {
+                lieferantennummer = String(detail.contact.roles.vendor.number || "").trim();
             }
         } catch (e) {
             Logger.log("Lexware Umsätze: Detail-Abruf für Beleg " + voucherId + " fehlgeschlagen: " + e.message);
@@ -617,8 +605,6 @@ function lexwareImportVouchersWithLineItemsToSheet_(voucherType, sheetName) {
         if (voucherItems.length === 0) {
             voucherItems = [{ _summaryFallback: true }];
         }
-
-        var belegtypNorm = belegtyp.toLowerCase();
 
         voucherItems.forEach(function (item, idx) {
             var posNr  = idx + 1;
@@ -642,18 +628,19 @@ function lexwareImportVouchersWithLineItemsToSheet_(voucherType, sheetName) {
             var posTax   = item._summaryFallback ? "" : (item.taxAmount !== undefined ? item.taxAmount : "");
 
             // Look up account from Konto-Zuordnung with priority:
-            //   1. Kontaktnummer + Belegtyp (composite key)
-            //   2. Kontaktnummer only
-            //   3. Kategorie
+            //   1. Lieferantennummer + Kategorie (composite key)
+            //   2. Nur Lieferantennummer
+            //   3. Nur Kategorie
             //   4. Fallback "Mietenkonto"
             var konto = "Mietenkonto";
-            if (kontaktnummer && belegtypNorm &&
-                kontoZuordnung.composite[kontaktnummer + "|" + belegtypNorm]) {
-                konto = kontoZuordnung.composite[kontaktnummer + "|" + belegtypNorm];
-            } else if (kontaktnummer && kontoZuordnung.contactOnly[kontaktnummer]) {
-                konto = kontoZuordnung.contactOnly[kontaktnummer];
-            } else if (categoryName && kontoZuordnung.category[categoryName.toLowerCase()]) {
-                konto = kontoZuordnung.category[categoryName.toLowerCase()];
+            var categoryKey = categoryName ? categoryName.toLowerCase() : "";
+            if (lieferantennummer && categoryKey &&
+                kontoZuordnung.composite[lieferantennummer + "|" + categoryKey]) {
+                konto = kontoZuordnung.composite[lieferantennummer + "|" + categoryKey];
+            } else if (lieferantennummer && kontoZuordnung.vendorOnly[lieferantennummer]) {
+                konto = kontoZuordnung.vendorOnly[lieferantennummer];
+            } else if (categoryKey && kontoZuordnung.category[categoryKey]) {
+                konto = kontoZuordnung.category[categoryKey];
             }
 
             var row = [
@@ -665,7 +652,7 @@ function lexwareImportVouchersWithLineItemsToSheet_(voucherType, sheetName) {
                 belegdatum,
                 faelligkeitsdatum,
                 kontakt,
-                kontaktnummer,
+                lieferantennummer,
                 gesamtbetrag,
                 waehrung,
                 bemerkung,

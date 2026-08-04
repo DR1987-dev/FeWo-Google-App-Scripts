@@ -208,7 +208,7 @@ function generateAlleBuchungenPlan() {
     lexwareUmsaetzeData.forEach((r, i) => {
       // Spalten (0-basiert): A=Zeilen_ID, B=Beleg_ID, C=Belegtyp, D=Status,
       //   E=Belegnummer, F=Belegdatum, G=Fälligkeitsdatum, H=Kontakt,
-      //   I=Kontaktnummer, J=Gesamtbetrag, K=Währung, L=Bemerkung, M=Position,
+      //   I=Lieferantennummer, J=Gesamtbetrag, K=Währung, L=Bemerkung, M=Position,
       //   N=Pos_Kategorie, O=Pos_Betrag_Brutto, P=Pos_MwSt_Satz,
       //   Q=Pos_MwSt_Betrag, R=Konto
       const belegtyp = String(r[2] || "").toLowerCase().trim();
