@@ -552,6 +552,8 @@ function lexwareImportVouchersWithLineItemsToSheet_(voucherType, sheetName) {
     // Build lookup tables
     var kontoZuordnung = buildKontoZuordnungIndex_();
     var kategorienIndex = buildKategorienIdToNameIndex_();
+    // UUID → Lieferantennummer (from Lexware Kunden sheet; voucher API does not include vendor role)
+    var contactIdToVendorNumber = buildContactIdToVendorNumberIndex_();
 
     // Index existing rows by Zeilen_ID (column A)
     var existingById = {};
@@ -619,12 +621,22 @@ function lexwareImportVouchersWithLineItemsToSheet_(voucherType, sheetName) {
             } else if (detail && Array.isArray(detail.lineItems)) {
                 voucherItems = detail.lineItems;
             }
-            lieferantennummer = extractLieferantennummer_(v, detail);
+            // Try to get vendor number from the contact-UUID → Lieferantennummer index
+            // (the voucher detail API does not return the full contact role with the vendor number)
+            var contactId = detail && detail.contact && detail.contact.id
+                          ? String(detail.contact.id).trim()
+                          : (v.contact && v.contact.id ? String(v.contact.id).trim() : "");
+            if (contactId && contactIdToVendorNumber[contactId]) {
+                lieferantennummer = contactIdToVendorNumber[contactId];
+            } else {
+                // Fall back to inline fields in the voucher response (future-proofing)
+                lieferantennummer = extractLieferantennummer_(v, detail);
+            }
         } catch (e) {
             Logger.log("Lexware Umsätze: Detail-Abruf für Beleg " + voucherId + " fehlgeschlagen: " + e.message);
         }
-        // Courtesy pause between individual detail requests
-        Utilities.sleep(100);
+        // Courtesy pause between individual detail requests to avoid rate limiting
+        Utilities.sleep(300);
 
         // If the detail endpoint returned no items, fall back to a single summary row
         if (voucherItems.length === 0) {
