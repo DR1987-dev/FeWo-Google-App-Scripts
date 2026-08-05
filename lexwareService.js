@@ -656,8 +656,8 @@ function lexwareImportVouchersWithLineItemsToSheet_(voucherType, sheetName) {
             //   1. Lieferantennummer + Kategorie (composite key)
             //   2. Nur Lieferantennummer
             //   3. Nur Kategorie
-            //   4. Fallback: purchaseinvoice => "WEG Konto", sonst "Mietenkonto"
-            var konto = belegtyp === "purchaseinvoice" ? "WEG Konto" : "Mietenkonto";
+            //   4. Fallback "Mietenkonto"
+            var konto = "Mietenkonto";
             var categoryKey = categoryName ? categoryName.toLowerCase() : "";
             if (lieferantennummer && categoryKey &&
                 kontoZuordnung.composite[lieferantennummer + "|" + categoryKey]) {
