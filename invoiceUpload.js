@@ -61,7 +61,7 @@ function getInvoiceUploadConfig_() {
  * Downloads the invoice document for a reservation from Lodgify.
  *
  * Uses the reservations invoices endpoints to fetch invoice metadata and then
- * downloads the PDF from pdfLink/publicInvoiceLink. Falls back to the legacy
+ * downloads the PDF from publicInvoiceLink/pdfLink. Falls back to the legacy
  * direct invoice path for older tenants.
  *
  * @param  {string} bookingId  Lodgify reservation/booking ID.
@@ -101,7 +101,7 @@ function getLodgifyInvoicePdf_(bookingId, pathTemplate) {
 
         var docUrl = extractLodgifyInvoiceDocumentUrl_(detail) || extractLodgifyInvoiceDocumentUrl_(invoice);
         if (!docUrl) {
-            lastError = "Invoice metadata contained no pdfLink/publicInvoiceLink for booking " + bookingId;
+            lastError = "Invoice metadata contained no publicInvoiceLink/pdfLink for booking " + bookingId;
             continue;
         }
 
@@ -137,8 +137,8 @@ function getLodgifyInvoicePdf_(bookingId, pathTemplate) {
 function extractLodgifyInvoiceDocumentUrl_(invoice) {
     if (!invoice || typeof invoice !== "object") return "";
     return String(
-        invoice.pdfLink ||
         invoice.publicInvoiceLink ||
+        invoice.pdfLink ||
         invoice.pdf_link ||
         invoice.public_invoice_link ||
         ""
