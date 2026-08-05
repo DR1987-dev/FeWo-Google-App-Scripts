@@ -8,12 +8,15 @@
 // Tracking columns appended to the AlleBuchungen sheet:
 //   LexwareInvoiceUploaded  – ISO timestamp of the upload
 //   LexwareFileId           – Lexware file UUID returned by the upload
+//   LexwareUploadError      – Error message of the last failed attempt
+//                             (booking is permanently skipped once this is set)
 //
 // Script Properties (alle optional):
 //   INVOICE_UPLOAD_DAYS_AFTER_CHECKOUT  – Tage nach CheckOut (Standard: 2)
 //   INVOICE_UPLOAD_SHEET_NAME           – Sheet-Name (Standard: AlleBuchungen)
 //   INVOICE_UPLOAD_CUTOFF_DATE          – Buchungen mit CheckOut vor diesem Datum
 //                                          werden ignoriert (ISO: YYYY-MM-DD)
+//                                          Standard: 2026-01-01
 //   LODGIFY_INVOICE_PATH_TEMPLATE       – Pfad-Template für den Invoice-Download.
 //                                          Standard: /v1/reservation/booking/{booking_id}/invoice
 //                                          {booking_id} wird durch die URL-kodierte Buchungs-ID ersetzt.
@@ -21,6 +24,7 @@
 
 var INVOICE_UPLOAD_COL_UPLOADED_ = "LexwareInvoiceUploaded";
 var INVOICE_UPLOAD_COL_FILE_ID_  = "LexwareFileId";
+var INVOICE_UPLOAD_COL_ERROR_    = "LexwareUploadError";
 
 // ---- Config ------------------------------------------------
 
@@ -34,9 +38,9 @@ function getInvoiceUploadConfig_() {
 
     var sheetName = (props.getProperty("INVOICE_UPLOAD_SHEET_NAME") || "AlleBuchungen").trim();
 
-    var cutoffDateStr = (props.getProperty("INVOICE_UPLOAD_CUTOFF_DATE") || "").trim();
-    var cutoffDate = cutoffDateStr ? new Date(cutoffDateStr) : null;
-    if (cutoffDate && isNaN(cutoffDate.getTime())) cutoffDate = null;
+    var cutoffDateStr = (props.getProperty("INVOICE_UPLOAD_CUTOFF_DATE") || "2026-01-01").trim();
+    var cutoffDate = cutoffDateStr ? new Date(cutoffDateStr) : new Date("2026-01-01");
+    if (cutoffDate && isNaN(cutoffDate.getTime())) cutoffDate = new Date("2026-01-01");
 
     var invoicePathTemplate = (
         props.getProperty("LODGIFY_INVOICE_PATH_TEMPLATE") ||
@@ -159,6 +163,7 @@ function getLodgifyInvoicePdf_(bookingId, pathTemplate) {
 function ensureInvoiceUploadColumns_(sheet, headers) {
     var uploadedIdx = headers.indexOf(INVOICE_UPLOAD_COL_UPLOADED_);
     var fileIdIdx   = headers.indexOf(INVOICE_UPLOAD_COL_FILE_ID_);
+    var errorIdx    = headers.indexOf(INVOICE_UPLOAD_COL_ERROR_);
 
     if (uploadedIdx === -1) {
         uploadedIdx = headers.length;
@@ -172,7 +177,13 @@ function ensureInvoiceUploadColumns_(sheet, headers) {
         headers.push(INVOICE_UPLOAD_COL_FILE_ID_);
     }
 
-    return { uploadedIdx: uploadedIdx, fileIdIdx: fileIdIdx };
+    if (errorIdx === -1) {
+        errorIdx = headers.length;
+        sheet.getRange(1, errorIdx + 1).setValue(INVOICE_UPLOAD_COL_ERROR_);
+        headers.push(INVOICE_UPLOAD_COL_ERROR_);
+    }
+
+    return { uploadedIdx: uploadedIdx, fileIdIdx: fileIdIdx, errorIdx: errorIdx };
 }
 
 function toMidnight_(date) {
@@ -248,6 +259,12 @@ function processLodgifyInvoiceUploadToLexware() {
             : "";
         if (uploadedValue) { skipped++; continue; }
 
+        // Skip bookings with a previously recorded upload error (prevents repeated API calls)
+        var errorValue = cols.errorIdx < row.length
+            ? String(row[cols.errorIdx] || "").trim()
+            : "";
+        if (errorValue) { skipped++; continue; }
+
         // Parse checkout date
         var checkoutRaw = row[checkoutColIdx];
         var checkoutDate = checkoutRaw instanceof Date
@@ -302,6 +319,9 @@ function processLodgifyInvoiceUploadToLexware() {
         } catch (e) {
             var errMsg = String(e && e.message ? e.message : e);
             Logger.log("InvoiceUpload: booking " + bookingId + " failed: " + errMsg);
+            // Persist the error so this booking is not retried on the next run
+            var sheetRowErr = i + 1;
+            sheet.getRange(sheetRowErr, cols.errorIdx + 1).setValue(errMsg);
             errors.push({ bookingId: bookingId, error: errMsg });
             failed++;
         }
