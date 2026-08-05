@@ -325,3 +325,45 @@ function buildContactIndexFromKundenSheet_() {
     );
     return index;
 }
+
+/**
+ * Liest das Tabellenblatt "Lexware Kunden" und erstellt einen Index
+ * UUID → Lieferantennummer.
+ *
+ * Wird verwendet, um aus der Kontakt-UUID eines Belegs die Lieferantennummer
+ * zu ermitteln, da die Lexware-Voucher-API nur die Kontakt-UUID zurückgibt,
+ * nicht aber die volle Kontakt-Rolle mit der Lieferantennummer.
+ *
+ * Gibt ein leeres Objekt zurück, wenn das Blatt nicht vorhanden oder leer ist.
+ *
+ * @return {Object}  { contactUUID → lieferantennummer }
+ */
+function buildContactIdToVendorNumberIndex_() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) return {};
+
+    var sheetName = getKundenSheetName_();
+    var sheet = ss.getSheetByName(sheetName);
+    if (!sheet || sheet.getLastRow() <= 1) return {};
+
+    var data = sheet.getRange(
+        2, 1, sheet.getLastRow() - 1, LEXWARE_KUNDEN_HEADERS.length
+    ).getValues();
+    if (!data || data.length === 0) return {};
+
+    var index = {};
+    for (var i = 0; i < data.length; i++) {
+        var row = data[i];
+        var uuid           = String(row[0] || "").trim();
+        var lieferantennum = String(row[3] || "").trim();
+        if (uuid && lieferantennum) {
+            index[uuid] = lieferantennum;
+        }
+    }
+
+    Logger.log(
+        "Kunden: UUID→Lieferantennummer-Index erstellt – " +
+        Object.keys(index).length + " Einträge."
+    );
+    return index;
+}
