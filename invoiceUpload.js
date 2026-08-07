@@ -360,6 +360,15 @@ function processLodgifyInvoiceUploadToLexware() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     if (!ss) throw new Error("No active spreadsheet");
 
+    try {
+        importLexwareKategorien();
+    } catch (e) {
+        Logger.log(
+            "VoucherCreate: Kategorien-Import fehlgeschlagen (wird mit vorhandenem Sheet fortgesetzt): " +
+            e.message
+        );
+    }
+
     var config = getInvoiceUploadConfig_();
     var sheet = ss.getSheetByName(config.sheetName);
 
@@ -404,7 +413,25 @@ function processLodgifyInvoiceUploadToLexware() {
     var errors    = [];
 
     // Cache for guest-name → Lexware contact UUID
-    var contactCache = {};
+    var contactCache  = {};
+    var categoryCache = {};
+
+    ["Einnahmen", "Dienstleistung"].forEach(function (categoryName) {
+        var categoryId = findLexwarePostingCategoryId_(categoryName);
+        if (categoryId) {
+            categoryCache[categoryName] = categoryId;
+        }
+    });
+
+    var missingCategories = ["Einnahmen", "Dienstleistung"].filter(function (categoryName) {
+        return !categoryCache[categoryName];
+    });
+    if (missingCategories.length > 0) {
+        throw new Error(
+            "VoucherCreate: Buchungskategorien fehlen im Sheet/API: " +
+            missingCategories.join(", ")
+        );
+    }
 
     for (var i = 1; i < allData.length; i++) {
         var row = allData[i];
@@ -507,13 +534,13 @@ function processLodgifyInvoiceUploadToLexware() {
                 lineItems: [
                     {
                         kategorieName: "Einnahmen",
-                        categoryId:    null,
+                        categoryId:    categoryCache.Einnahmen,
                         betragBrutto:  einnahmenAmount,
                         mwstSatz:      7
                     },
                     {
                         kategorieName: "Dienstleistung",
-                        categoryId:    null,
+                        categoryId:    categoryCache.Dienstleistung,
                         betragBrutto:  serviceAmount,
                         mwstSatz:      7
                     }
