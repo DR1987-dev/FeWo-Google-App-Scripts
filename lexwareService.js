@@ -610,9 +610,15 @@ function lexwareImportVouchersWithLineItemsToSheet_(voucherType, sheetName) {
         var waehrung          = v.currency || "EUR";
         var bemerkung         = v.remark || "";
 
-        // Fetch full voucher detail to get line items and vendor number
+        // Resolve Lieferantennummer from the voucherlist summary using the pre-built
+        // Kunden index (UUID → Lieferantennummer). No extra API request is needed here.
+        var contactId = v.contact && v.contact.id ? String(v.contact.id).trim() : "";
+        var lieferantennummer = contactId && contactIdToVendorNumber[contactId]
+            ? contactIdToVendorNumber[contactId]
+            : extractLieferantennummer_(v, null);
+
+        // Fetch full voucher detail to get line items only
         var voucherItems = [];
-        var lieferantennummer = "";
         try {
             var detailResult = lexwareGetVoucherDetail_(voucherId);
             var detail = detailResult.body;
@@ -621,16 +627,15 @@ function lexwareImportVouchersWithLineItemsToSheet_(voucherType, sheetName) {
             } else if (detail && Array.isArray(detail.lineItems)) {
                 voucherItems = detail.lineItems;
             }
-            // Try to get vendor number from the contact-UUID → Lieferantennummer index
-            // (the voucher detail API does not return the full contact role with the vendor number)
-            var contactId = detail && detail.contact && detail.contact.id
-                          ? String(detail.contact.id).trim()
-                          : (v.contact && v.contact.id ? String(v.contact.id).trim() : "");
-            if (contactId && contactIdToVendorNumber[contactId]) {
-                lieferantennummer = contactIdToVendorNumber[contactId];
-            } else {
-                // Fall back to inline fields in the voucher response (future-proofing)
-                lieferantennummer = extractLieferantennummer_(v, detail);
+            // If Lieferantennummer not found via summary index, try the detail response as fallback
+            if (!lieferantennummer) {
+                var detailContactId = detail && detail.contact && detail.contact.id
+                    ? String(detail.contact.id).trim() : "";
+                if (detailContactId && contactIdToVendorNumber[detailContactId]) {
+                    lieferantennummer = contactIdToVendorNumber[detailContactId];
+                } else {
+                    lieferantennummer = extractLieferantennummer_(v, detail);
+                }
             }
         } catch (e) {
             Logger.log("Lexware Umsätze: Detail-Abruf für Beleg " + voucherId + " fehlgeschlagen: " + e.message);
