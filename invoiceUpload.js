@@ -22,6 +22,10 @@
 //   INVOICE_UPLOAD_CUTOFF_DATE          – Buchungen mit CheckIn vor diesem Datum
 //                                          werden ignoriert (ISO: YYYY-MM-DD)
 //                                          Standard: 2026-01-01
+//   INVOICE_EINMALKUNDEN                – "true": Einmalkunden-Modus – Gastnamen werden
+//                                          direkt als Adresse in den Beleg geschrieben,
+//                                          kein Lexware-Kontakt wird angelegt/gesucht.
+//                                          Standard: "false" (bisheriges Verhalten)
 //
 // ---- PDF-Download (Lodgify public API nicht verfügbar – für später auskommentiert) ----
 //
@@ -51,10 +55,13 @@ function getInvoiceUploadConfig_() {
     var cutoffDate = cutoffDateStr ? new Date(cutoffDateStr) : new Date("2026-01-01");
     if (cutoffDate && isNaN(cutoffDate.getTime())) cutoffDate = new Date("2026-01-01");
 
+    var einmalkunden = (props.getProperty("INVOICE_EINMALKUNDEN") || "").trim().toLowerCase() === "true";
+
     return {
         daysBeforeCheckin: daysBeforeCheckin,
         sheetName: sheetName,
-        cutoffDate: cutoffDate
+        cutoffDate: cutoffDate,
+        einmalkunden: einmalkunden
     };
 }
 
@@ -476,20 +483,22 @@ function processLodgifyInvoiceUploadToLexware() {
         );
 
         try {
-            // Resolve Lexware contact
-            var contactId = contactCache[guestName];
-            if (!contactId) {
-                contactId = findOrCreateLexwareContactByGuestName_(guestName);
-                contactCache[guestName] = contactId;
+            // Resolve Lexware contact (skipped in Einmalkunden-Modus)
+            var contactId = null;
+            if (!config.einmalkunden) {
+                contactId = contactCache[guestName];
+                if (!contactId) {
+                    contactId = findOrCreateLexwareContactByGuestName_(guestName);
+                    contactCache[guestName] = contactId;
+                }
             }
 
             // Build voucher reference from booking ID
             var belegRef = "Lodgify-" + bookingId;
 
             // Create voucher
-            var voucherId = createLexwareManuellerUmsatz_({
+            var voucherParams = {
                 typ:          "salesinvoice",
-                contactId:    contactId,
                 kontaktnummer: "",
                 belegRef:     belegRef,
                 voucherDate:  voucherDateStr,
@@ -509,7 +518,13 @@ function processLodgifyInvoiceUploadToLexware() {
                         mwstSatz:      7
                     }
                 ]
-            });
+            };
+            if (contactId) {
+                voucherParams.contactId = contactId;
+            } else {
+                voucherParams.address = { name: guestName };
+            }
+            var voucherId = createLexwareManuellerUmsatz_(voucherParams);
 
             var timestamp = Utilities.formatDate(
                 new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss"
@@ -523,6 +538,7 @@ function processLodgifyInvoiceUploadToLexware() {
                 "VoucherCreate: Buchung " + bookingId +
                 " → Beleg erstellt, voucherId=" + (voucherId || "n/a") +
                 ", gast=" + guestName +
+                (config.einmalkunden ? " [Einmalkunde]" : ", kontaktId=" + (contactId || "n/a")) +
                 ", betrag=" + totalAmount +
                 ", checkin=" + Utilities.formatDate(checkinDay, Session.getScriptTimeZone(), "yyyy-MM-dd")
             );
