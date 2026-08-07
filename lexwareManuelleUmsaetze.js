@@ -163,7 +163,10 @@ function buildManuelleUmsaetzeVoucherNumber_(params) {
  *
  * @param {Object}   params
  * @param {string}   params.typ           "salesinvoice" | "purchaseinvoice"
- * @param {string}   params.contactId     Lexware-UUID des Kontakts
+ * @param {string}   [params.contactId]   Lexware-UUID des Kontakts (optional wenn address gesetzt)
+ * @param {Object}   [params.address]     Adressobjekt für Einmalkunden (optional):
+ *                                          { name: "Vorname Nachname" }
+ *                                          Wird nur verwendet wenn contactId leer ist.
  * @param {string}   params.kontaktnummer Kontaktnummer (für Belegnummer-Generierung)
  * @param {string}   params.belegRef      Beleg_Ref aus dem Sheet
  * @param {string}   params.voucherDate   Belegdatum (JJJJ-MM-TT)
@@ -220,9 +223,14 @@ function createLexwareManuellerUmsatz_(params) {
         totalGrossAmount: totalGrossAmount,
         totalTaxAmount: totalTaxAmount,
         taxType: "gross",
-        contactId: params.contactId,
         voucherItems: voucherItems
     };
+
+    if (params.contactId) {
+        payload.contactId = params.contactId;
+    } else if (params.address && params.address.name) {
+        payload.address = { name: String(params.address.name).trim() };
+    }
 
     if (params.dueDate) {
         payload.dueDate = params.dueDate;
