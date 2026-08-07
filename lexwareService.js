@@ -39,6 +39,10 @@ function getRetryAfterMs_(headers) {
     return seconds > 0 ? Math.round(seconds * 1000) : 0;
 }
 
+function isLexware404_(error) {
+    return !!(error && error.message && /\(404\)/.test(String(error.message)));
+}
+
 function lexwareRequest(path, queryParams, baseUrl) {
     var config = validateLexwareConfig();
     var resolvedBaseUrl = baseUrl || LEXWARE_BASE_URL;
@@ -458,6 +462,22 @@ function extractLieferantennummer_(voucherSummary, voucherDetail) {
     return candidates.length ? candidates[0] : "";
 }
 
+function resolveLexwareContactId_(voucherSummary, voucherDetail) {
+    var candidates = [
+        voucherSummary && voucherSummary.contactId,
+        voucherSummary && voucherSummary.contact && voucherSummary.contact.id,
+        voucherSummary && voucherSummary.contact && voucherSummary.contact.contactId,
+        voucherDetail && voucherDetail.contactId,
+        voucherDetail && voucherDetail.contact && voucherDetail.contact.id,
+        voucherDetail && voucherDetail.contact && voucherDetail.contact.contactId
+    ];
+    for (var i = 0; i < candidates.length; i++) {
+        var id = String(candidates[i] || "").trim();
+        if (id) return id;
+    }
+    return "";
+}
+
 // ---- Umsätze with line items --------------------------------
 
 var LEXWARE_UMSAETZE_DETAIL_HEADERS = [
@@ -612,7 +632,7 @@ function lexwareImportVouchersWithLineItemsToSheet_(voucherType, sheetName) {
 
         // Resolve Lieferantennummer from the voucherlist summary using the pre-built
         // Kunden index (UUID → Lieferantennummer). No extra API request is needed here.
-        var contactId = v.contact && v.contact.id ? String(v.contact.id).trim() : "";
+        var contactId = resolveLexwareContactId_(v, null);
         var lieferantennummer = contactId && contactIdToVendorNumber[contactId]
             ? contactIdToVendorNumber[contactId]
             : extractLieferantennummer_(v, null);
@@ -629,8 +649,7 @@ function lexwareImportVouchersWithLineItemsToSheet_(voucherType, sheetName) {
             }
             // If Lieferantennummer not found via summary index, try the detail response as fallback
             if (!lieferantennummer) {
-                var detailContactId = detail && detail.contact && detail.contact.id
-                    ? String(detail.contact.id).trim() : "";
+                var detailContactId = resolveLexwareContactId_(null, detail);
                 if (detailContactId && contactIdToVendorNumber[detailContactId]) {
                     lieferantennummer = contactIdToVendorNumber[detailContactId];
                 } else {
@@ -790,6 +809,7 @@ function lexwareGetBankTransactions_(bankAccountId, page, pageSize, requestMode)
         : allRequests;
     var lastError = null;
     var attemptedVariants = [];
+    var had404Variant = false;
     for (var i = 0; i < requests.length; i++) {
         try {
             return {
@@ -799,21 +819,35 @@ function lexwareGetBankTransactions_(bankAccountId, page, pageSize, requestMode)
         } catch (e) {
             lastError = e;
             attemptedVariants.push(requests[i].name);
-            Logger.log(
-                "Lexware banktransactions request variant failed (" +
-                requests[i].name +
-                ", page=" + safePage +
-                ", baseUrl=" + requests[i].baseUrl +
-                "): " + e.message
-            );
+            if (isLexware404_(e)) {
+                had404Variant = true;
+            } else {
+                Logger.log(
+                    "Lexware banktransactions request variant failed (" +
+                    requests[i].name +
+                    ", page=" + safePage +
+                    ", baseUrl=" + requests[i].baseUrl +
+                    "): " + e.message
+                );
+            }
         }
+    }
+    var has404 = lastError && isLexware404_(lastError);
+    if (has404) {
+        Logger.log("Lexware banktransactions endpoint not available (404).");
+        throw new Error(
+            "Lexware banktransactions endpoint not available (404) for variants [" +
+            attemptedVariants.join(", ") +
+            "] on page " + safePage
+        );
     }
     Logger.log("Lexware banktransactions: all request variants failed");
     throw new Error(
         "Lexware banktransactions request failed for variants [" +
         attemptedVariants.join(", ") +
         "] on page " + safePage + ": " +
-        (lastError ? lastError.message : "unknown error")
+        (lastError ? lastError.message : "unknown error") +
+        (had404Variant ? " (at least one variant returned 404)" : "")
     );
 }
 
@@ -873,7 +907,11 @@ function importLexwareKontostand() {
             accounts = [body];
         }
     } catch (e) {
-        Logger.log("Lexware: /bankaccounts endpoint not available – skipping Kontostand: " + e.message);
+        Logger.log(
+            isLexware404_(e)
+                ? "Lexware: /bankaccounts endpoint not available (404) – skipping Kontostand."
+                : "Lexware: could not fetch bank accounts – skipping Kontostand: " + e.message
+        );
         return { ok: false, sheet: sheetName, total: 0, error: e.message };
     }
 
@@ -983,7 +1021,9 @@ function importLexwareFinanzen() {
             if (a.id) accountNames[String(a.id)] = a.name || a.accountName || "";
         });
     } catch (e) {
-        Logger.log("Lexware: could not fetch bank account names: " + e.message);
+        if (!isLexware404_(e)) {
+            Logger.log("Lexware: could not fetch bank account names: " + e.message);
+        }
     }
 
     // Fetch all transaction pages
@@ -1314,12 +1354,12 @@ function lexwareUploadFile_(blob, fileName) {
  *   1. importLexwareToSheet()             – outgoing invoices (Rechnungen)
  *   2. importLexwareEinnahmen()           – income vouchers (Einnahmen)
  *   3. importLexwareAusgaben()            – expense vouchers (Ausgaben)
- *   4. importLexwareUmsaetze()            – all vouchers with line items (Umsätze)
- *   5. importLexwareKontostand()          – bank account balances (Kontostand)
- *   6. importLexwareFinanzen()            – all bank transactions (Finanzen)
- *   7. importLexwareKategorien()          – posting categories (Buchungskategorien)
- *   8. syncLexwareKundenSheet()           – contacts cache (Kunden & Lieferanten)
- *   9. setupLexwareKontoZuordnungSheet()  – ensures Konto-Zuordnung sheet exists
+ *   4. importLexwareKategorien()          – posting categories (Buchungskategorien)
+ *   5. setupLexwareKontoZuordnungSheet()  – ensures Konto-Zuordnung sheet exists
+ *   6. syncLexwareKundenSheet()           – contacts cache (Kunden & Lieferanten)
+ *   7. importLexwareUmsaetze()            – all vouchers with line items (Umsätze)
+ *   8. importLexwareKontostand()          – bank account balances (Kontostand)
+ *   9. importLexwareFinanzen()            – all bank transactions (Finanzen)
  */
 function importLexwareAll() {
     importLexwareToSheet();
@@ -1335,6 +1375,11 @@ function importLexwareAll() {
     } catch (e) {
         Logger.log("setupLexwareKontoZuordnungSheet skipped: " + e.message);
     }
+    try {
+        syncLexwareKundenSheet();
+    } catch (e) {
+        Logger.log("syncLexwareKundenSheet skipped: " + e.message);
+    }
     importLexwareUmsaetze();
     try {
         importLexwareKontostand();
@@ -1342,9 +1387,4 @@ function importLexwareAll() {
         Logger.log("importLexwareKontostand skipped: " + e.message);
     }
     importLexwareFinanzen();
-    try {
-        syncLexwareKundenSheet();
-    } catch (e) {
-        Logger.log("syncLexwareKundenSheet skipped: " + e.message);
-    }
 }
