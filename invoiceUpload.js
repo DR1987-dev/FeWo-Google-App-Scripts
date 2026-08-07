@@ -415,15 +415,16 @@ function processLodgifyInvoiceUploadToLexware() {
     // Cache for guest-name → Lexware contact UUID
     var contactCache  = {};
     var categoryCache = {};
+    var requiredCategories = ["Einnahmen", "Dienstleistung"];
 
-    ["Einnahmen", "Dienstleistung"].forEach(function (categoryName) {
+    requiredCategories.forEach(function (categoryName) {
         var categoryId = findLexwarePostingCategoryId_(categoryName);
         if (categoryId) {
             categoryCache[categoryName] = categoryId;
         }
     });
 
-    var missingCategories = ["Einnahmen", "Dienstleistung"].filter(function (categoryName) {
+    var missingCategories = requiredCategories.filter(function (categoryName) {
         return !categoryCache[categoryName];
     });
     if (missingCategories.length > 0) {
