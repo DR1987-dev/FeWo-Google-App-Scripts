@@ -1,6 +1,5 @@
 function runAll() {
   try {
-    importAllCSVFromDrive();
     importLodgifyEinnahmenToImport();
     importLexwareAll();
     processLodgifyInvoiceUploadToLexware();
