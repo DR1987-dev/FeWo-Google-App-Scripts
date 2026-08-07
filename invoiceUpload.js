@@ -1,38 +1,47 @@
 // ============================================================
-// Lodgify → Lexware Invoice Upload
+// Lodgify → Lexware Voucher Creation
 //
-// Two days after the checkout date (configurable), the invoice
-// PDF for a booking is downloaded from the Lodgify API and
-// uploaded to Lexware Office via the files API.
+// Two days BEFORE the check-in date (configurable), a Lexware
+// sales-invoice (Einnahmebeleg) is created for the booking with
+// two line items:
+//   1. Einnahmen  – 7 % VAT, amount = total booking amount − 50 €
+//   2. Dienstleistung – 7 % VAT, amount = 50 €
+//
+// The Lexware contact is looked up by the guest name; if no
+// matching contact exists it is created automatically.
 //
 // Tracking columns appended to the AlleBuchungen sheet:
-//   LexwareInvoiceUploaded  – ISO timestamp of the upload
-//   LexwareFileId           – Lexware file UUID returned by the upload
-//   LexwareUploadError      – Error message of the last failed attempt
-//                             (booking is permanently skipped once this is set)
+//   LexwareVoucherCreated  – ISO timestamp of the voucher creation
+//   LexwareVoucherId       – Lexware voucher UUID
+//   LexwareVoucherError    – Error message of the last failed attempt
+//                            (booking is permanently skipped once this is set)
 //
 // Script Properties (alle optional):
-//   INVOICE_UPLOAD_DAYS_AFTER_CHECKOUT  – Tage nach CheckOut (Standard: 2)
+//   INVOICE_VOUCHER_DAYS_BEFORE_CHECKIN – Tage vor CheckIn (Standard: 2)
 //   INVOICE_UPLOAD_SHEET_NAME           – Sheet-Name (Standard: AlleBuchungen)
-//   INVOICE_UPLOAD_CUTOFF_DATE          – Buchungen mit CheckOut vor diesem Datum
+//   INVOICE_UPLOAD_CUTOFF_DATE          – Buchungen mit CheckIn vor diesem Datum
 //                                          werden ignoriert (ISO: YYYY-MM-DD)
 //                                          Standard: 2026-01-01
-//   LODGIFY_INVOICE_PATH_TEMPLATE       – Legacy-Pfad-Template für den Invoice-Download.
-//                                          Standard: /v1/reservation/booking/{booking_id}/invoice
-//                                          {booking_id} wird durch die URL-kodierte Buchungs-ID ersetzt.
+//
+// ---- PDF-Download (Lodgify public API nicht verfügbar – für später auskommentiert) ----
+//
+// INVOICE_UPLOAD_DAYS_AFTER_CHECKOUT  – Tage nach CheckOut (Standard: 2)
+// LODGIFY_INVOICE_PATH_TEMPLATE       – Legacy-Pfad-Template für den Invoice-Download.
+//                                        Standard: /v1/reservation/booking/{booking_id}/invoice
+//                                        {booking_id} wird durch die URL-kodierte Buchungs-ID ersetzt.
 // ============================================================
 
-var INVOICE_UPLOAD_COL_UPLOADED_ = "LexwareInvoiceUploaded";
-var INVOICE_UPLOAD_COL_FILE_ID_  = "LexwareFileId";
-var INVOICE_UPLOAD_COL_ERROR_    = "LexwareUploadError";
+var INVOICE_UPLOAD_COL_UPLOADED_ = "LexwareVoucherCreated";
+var INVOICE_UPLOAD_COL_FILE_ID_  = "LexwareVoucherId";
+var INVOICE_UPLOAD_COL_ERROR_    = "LexwareVoucherError";
 
 // ---- Config ------------------------------------------------
 
 function getInvoiceUploadConfig_() {
     var props = PropertiesService.getScriptProperties();
 
-    var rawDays = props.getProperty("INVOICE_UPLOAD_DAYS_AFTER_CHECKOUT");
-    var daysAfterCheckout = (rawDays !== null && rawDays !== "" && !isNaN(Number(rawDays)) && Number(rawDays) >= 0)
+    var rawDays = props.getProperty("INVOICE_VOUCHER_DAYS_BEFORE_CHECKIN");
+    var daysBeforeCheckin = (rawDays !== null && rawDays !== "" && !isNaN(Number(rawDays)) && Number(rawDays) >= 0)
         ? Number(rawDays)
         : 2;
 
@@ -42,20 +51,15 @@ function getInvoiceUploadConfig_() {
     var cutoffDate = cutoffDateStr ? new Date(cutoffDateStr) : new Date("2026-01-01");
     if (cutoffDate && isNaN(cutoffDate.getTime())) cutoffDate = new Date("2026-01-01");
 
-    var invoicePathTemplate = (
-        props.getProperty("LODGIFY_INVOICE_PATH_TEMPLATE") ||
-        "/v1/reservation/booking/{booking_id}/invoice"
-    ).trim();
-
     return {
-        daysAfterCheckout: daysAfterCheckout,
+        daysBeforeCheckin: daysBeforeCheckin,
         sheetName: sheetName,
-        cutoffDate: cutoffDate,
-        invoicePathTemplate: invoicePathTemplate
+        cutoffDate: cutoffDate
     };
 }
 
-// ---- Lodgify invoice download ------------------------------
+// ---- Lodgify invoice download (auskommentiert – PDF-Download über Lodgify public API nicht verfügbar) ------
+/*
 
 /**
  * Downloads the invoice document for a reservation from Lodgify.
@@ -201,15 +205,100 @@ function fetchLegacyLodgifyInvoiceBlob_(path, apiKey) {
     return response.getBlob();
 }
 
+*/
+
+// ---- Lexware contact helper --------------------------------
+
+/**
+ * Looks up a Lexware contact by display name. If none is found, creates a new
+ * customer contact with the given name and returns its UUID.
+ *
+ * @param  {string} guestName  Full name of the guest.
+ * @return {string}  Lexware contact UUID.
+ */
+function findOrCreateLexwareContactByGuestName_(guestName) {
+    var name = String(guestName || "").trim();
+    if (!name) throw new Error("findOrCreateLexwareContactByGuestName_: guest name is empty");
+
+    // Search for existing contact by name
+    var searchResult;
+    try {
+        searchResult = lexwareRequest("/contacts", { name: name });
+    } catch (e) {
+        Logger.log("VoucherCreate: Kontaktsuche fehlgeschlagen für '" + name + "': " + e.message);
+        searchResult = null;
+    }
+
+    if (searchResult && searchResult.body) {
+        var body = searchResult.body;
+        var contacts = [];
+        if (Array.isArray(body)) {
+            contacts = body;
+        } else if (body && Array.isArray(body.content)) {
+            contacts = body.content;
+        } else if (body && Array.isArray(body.contacts)) {
+            contacts = body.contacts;
+        } else if (body && body.id) {
+            contacts = [body];
+        }
+
+        for (var i = 0; i < contacts.length; i++) {
+            var c = contacts[i];
+            var displayName = "";
+            if (c.company && c.company.name) {
+                displayName = String(c.company.name).trim();
+            } else if (c.person) {
+                var parts = [];
+                if (c.person.firstName) parts.push(String(c.person.firstName).trim());
+                if (c.person.lastName)  parts.push(String(c.person.lastName).trim());
+                displayName = parts.join(" ");
+            } else {
+                displayName = String(c.displayName || c.name || "").trim();
+            }
+
+            if (displayName.toLowerCase() === name.toLowerCase() && c.id) {
+                Logger.log("VoucherCreate: Kontakt '" + name + "' gefunden (ID=" + c.id + ").");
+                return String(c.id);
+            }
+        }
+    }
+
+    // Not found – create a new customer contact
+    var nameParts = name.split(" ");
+    var firstName = nameParts.slice(0, -1).join(" ") || name;
+    var lastName  = nameParts.length > 1 ? nameParts[nameParts.length - 1] : "";
+
+    var newContact = {
+        roles: { customer: {} },
+        person: {
+            firstName: firstName,
+            lastName:  lastName || undefined
+        }
+    };
+
+    var createResult = lexwarePostRequest_("/contacts", newContact);
+    var created = createResult.body || {};
+    var newId = String(created.id || "");
+    if (!newId) {
+        throw new Error(
+            "VoucherCreate: Kontakt erstellt, aber keine ID zurückgegeben. Body: " +
+            JSON.stringify(created)
+        );
+    }
+
+    Logger.log("VoucherCreate: Kontakt '" + name + "' erstellt (ID=" + newId + ").");
+    return newId;
+}
+
 // ---- Helpers -----------------------------------------------
 
 /**
- * Ensures the two tracking columns exist in the sheet header row and
+ * Ensures the three tracking columns exist in the sheet header row and
  * returns their 0-based column indices.
  *
  * @param  {Sheet}  sheet    Target sheet.
  * @param  {Array}  headers  Current header values (mutated in place when columns are added).
- * @return {{ uploadedIdx: number, fileIdIdx: number }}
+ * @return {{ uploadedIdx: number, fileIdIdx: number, errorIdx: number }}
  */
 function ensureInvoiceUploadColumns_(sheet, headers) {
     var uploadedIdx = headers.indexOf(INVOICE_UPLOAD_COL_UPLOADED_);
@@ -244,13 +333,16 @@ function toMidnight_(date) {
 // ---- Main --------------------------------------------------
 
 /**
- * Scans the AlleBuchungen sheet for bookings whose checkout date was
- * `daysAfterCheckout` days ago (or earlier, if not yet processed) and:
- *   1. Downloads the invoice PDF from Lodgify.
- *   2. Uploads the PDF to Lexware Office via the files API.
- *   3. Writes the upload timestamp and Lexware file ID back to the sheet.
+ * Scans the AlleBuchungen sheet for bookings whose check-in date is
+ * `daysBeforeCheckin` days from today (or earlier, if not yet processed) and
+ * creates a Lexware sales invoice with two line items:
+ *   1. Einnahmen     – 7 % VAT, amount = total booking amount − 50 €
+ *   2. Dienstleistung – 7 % VAT, amount = 50 €
  *
- * Already-processed rows (non-empty LexwareInvoiceUploaded) are skipped.
+ * The Lexware contact is looked up by the guest name; if none exists it is
+ * created automatically.
+ *
+ * Already-processed rows (non-empty LexwareVoucherCreated) are skipped.
  *
  * @return {{ ok: boolean, processed: number, skipped: number, failed: number, errors: Array }}
  */
@@ -263,7 +355,7 @@ function processLodgifyInvoiceUploadToLexware() {
 
     if (!sheet) {
         Logger.log(
-            "InvoiceUpload: sheet '" + config.sheetName + "' not found – skipping."
+            "VoucherCreate: sheet '" + config.sheetName + "' not found – skipping."
         );
         return { ok: true, processed: 0, skipped: 0, failed: 0, errors: [] };
     }
@@ -278,12 +370,14 @@ function processLodgifyInvoiceUploadToLexware() {
     var headers = allData[0].map(function (h) { return String(h || "").trim(); });
 
     var bookingIdColIdx = headers.indexOf("LodgifyBookingId");
-    var checkoutColIdx  = headers.indexOf("CheckOut");
+    var checkinColIdx   = headers.indexOf("CheckIn");
     var statusColIdx    = headers.indexOf("Status");
+    var gastNameColIdx  = headers.indexOf("GastName");
+    var betragColIdx    = headers.indexOf("Betrag");
 
-    if (bookingIdColIdx === -1 || checkoutColIdx === -1) {
+    if (bookingIdColIdx === -1 || checkinColIdx === -1) {
         Logger.log(
-            "InvoiceUpload: required columns LodgifyBookingId / CheckOut not found in sheet '" +
+            "VoucherCreate: required columns LodgifyBookingId / CheckIn not found in sheet '" +
             config.sheetName + "' – skipping."
         );
         return { ok: true, processed: 0, skipped: 0, failed: 0, errors: [] };
@@ -292,11 +386,15 @@ function processLodgifyInvoiceUploadToLexware() {
     var cols = ensureInvoiceUploadColumns_(sheet, headers);
 
     var today = toMidnight_(new Date());
+    var msPerDay = 24 * 60 * 60 * 1000;
 
     var processed = 0;
     var skipped   = 0;
     var failed    = 0;
     var errors    = [];
+
+    // Cache for guest-name → Lexware contact UUID
+    var contactCache = {};
 
     for (var i = 1; i < allData.length; i++) {
         var row = allData[i];
@@ -304,36 +402,35 @@ function processLodgifyInvoiceUploadToLexware() {
         var bookingId = String(row[bookingIdColIdx] || "").trim();
         if (!bookingId) { skipped++; continue; }
 
-        // Skip already uploaded
+        // Skip already created
         var uploadedValue = cols.uploadedIdx < row.length
             ? String(row[cols.uploadedIdx] || "").trim()
             : "";
         if (uploadedValue) { skipped++; continue; }
 
-        // Skip bookings with a previously recorded upload error (prevents repeated API calls)
+        // Skip bookings with a previously recorded error (prevents repeated API calls)
         var errorValue = cols.errorIdx < row.length
             ? String(row[cols.errorIdx] || "").trim()
             : "";
         if (errorValue) { skipped++; continue; }
 
-        // Parse checkout date
-        var checkoutRaw = row[checkoutColIdx];
-        var checkoutDate = checkoutRaw instanceof Date
-            ? checkoutRaw
-            : (checkoutRaw ? new Date(checkoutRaw) : null);
-        if (!checkoutDate || isNaN(checkoutDate.getTime())) { skipped++; continue; }
+        // Parse check-in date
+        var checkinRaw = row[checkinColIdx];
+        var checkinDate = checkinRaw instanceof Date
+            ? checkinRaw
+            : (checkinRaw ? new Date(checkinRaw) : null);
+        if (!checkinDate || isNaN(checkinDate.getTime())) { skipped++; continue; }
 
-        var checkoutDay = toMidnight_(checkoutDate);
+        var checkinDay = toMidnight_(checkinDate);
 
         // Respect optional cutoff
-        if (config.cutoffDate && checkoutDay < config.cutoffDate) { skipped++; continue; }
+        if (config.cutoffDate && checkinDay < config.cutoffDate) { skipped++; continue; }
 
-        // Trigger date = checkout + daysAfterCheckout
-        var msPerDay = 24 * 60 * 60 * 1000;
-        var triggerDate = new Date(checkoutDay.getTime() + config.daysAfterCheckout * msPerDay);
+        // Trigger date = checkin − daysBeforeCheckin
+        var triggerDate = new Date(checkinDay.getTime() - config.daysBeforeCheckin * msPerDay);
 
-        // Only process if the trigger date has been reached
-        if (triggerDate > today) { skipped++; continue; }
+        // Only process when today has reached the trigger date
+        if (today < triggerDate) { skipped++; continue; }
 
         // Skip declined / cancelled bookings
         if (statusColIdx >= 0) {
@@ -341,45 +438,97 @@ function processLodgifyInvoiceUploadToLexware() {
             if (status && isDeclinedOrCancelledStatusText_(status)) { skipped++; continue; }
         }
 
-        // Download & upload
+        // Read guest name and total amount
+        var guestName = gastNameColIdx >= 0
+            ? String(row[gastNameColIdx] || "").trim()
+            : "";
+        var totalAmount = betragColIdx >= 0
+            ? (Number(row[betragColIdx]) || 0)
+            : 0;
+
+        if (!guestName) {
+            var errMsg = "GastName ist leer für Buchung " + bookingId;
+            Logger.log("VoucherCreate: " + errMsg);
+            sheet.getRange(i + 1, cols.errorIdx + 1).setValue(errMsg);
+            errors.push({ bookingId: bookingId, error: errMsg });
+            failed++;
+            continue;
+        }
+
+        // Compute line item amounts (minimum 0.01 € for item 1)
+        var serviceAmount   = 50;
+        var einnahmenAmount = round2(totalAmount - serviceAmount);
+        if (einnahmenAmount < 0) einnahmenAmount = 0;
+
+        // Belegdatum = trigger date (= checkin − daysBeforeCheckin)
+        var voucherDateStr = Utilities.formatDate(
+            triggerDate, Session.getScriptTimeZone(), "yyyy-MM-dd"
+        );
+
         try {
-            var blob = getLodgifyInvoicePdf_(bookingId, config.invoicePathTemplate);
-            var fileName = "Lodgify_Invoice_" + bookingId + ".pdf";
-            // Normalise content type before upload; lexwareUploadFile_ will set the name.
-            if (!blob.getContentType() || blob.getContentType() === "application/octet-stream") {
-                blob.setContentType("application/pdf");
+            // Resolve Lexware contact
+            var contactId = contactCache[guestName];
+            if (!contactId) {
+                contactId = findOrCreateLexwareContactByGuestName_(guestName);
+                contactCache[guestName] = contactId;
             }
 
-            var uploadResult = lexwareUploadFile_(blob, fileName);
+            // Build voucher reference from booking ID
+            var belegRef = "Lodgify-" + bookingId;
+
+            // Create voucher
+            var voucherId = createLexwareManuellerUmsatz_({
+                typ:          "salesinvoice",
+                contactId:    contactId,
+                kontaktnummer: "",
+                belegRef:     belegRef,
+                voucherDate:  voucherDateStr,
+                notiz:        "Lodgify Buchung " + bookingId + " – CheckIn " +
+                               Utilities.formatDate(checkinDay, Session.getScriptTimeZone(), "yyyy-MM-dd"),
+                lineItems: [
+                    {
+                        kategorieName: "Einnahmen",
+                        categoryId:    null,
+                        betragBrutto:  einnahmenAmount,
+                        mwstSatz:      7
+                    },
+                    {
+                        kategorieName: "Dienstleistung",
+                        categoryId:    null,
+                        betragBrutto:  serviceAmount,
+                        mwstSatz:      7
+                    }
+                ]
+            });
+
             var timestamp = Utilities.formatDate(
                 new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss"
             );
 
-            // i=1 is the first data row → sheet row 2 (row 1 = header)
             var sheetRow = i + 1;
             sheet.getRange(sheetRow, cols.uploadedIdx + 1).setValue(timestamp);
-            sheet.getRange(sheetRow, cols.fileIdIdx + 1).setValue(uploadResult.fileId || "");
+            sheet.getRange(sheetRow, cols.fileIdIdx + 1).setValue(voucherId || "");
 
             Logger.log(
-                "InvoiceUpload: booking " + bookingId +
-                " → uploaded, fileId=" + (uploadResult.fileId || "n/a") +
-                ", checkout=" + Utilities.formatDate(checkoutDay, Session.getScriptTimeZone(), "yyyy-MM-dd")
+                "VoucherCreate: Buchung " + bookingId +
+                " → Beleg erstellt, voucherId=" + (voucherId || "n/a") +
+                ", gast=" + guestName +
+                ", betrag=" + totalAmount +
+                ", checkin=" + Utilities.formatDate(checkinDay, Session.getScriptTimeZone(), "yyyy-MM-dd")
             );
             processed++;
 
         } catch (e) {
-            var errMsg = String(e && e.message ? e.message : e);
-            Logger.log("InvoiceUpload: booking " + bookingId + " failed: " + errMsg);
-            // Persist the error so this booking is not retried on the next run
-            var sheetRowErr = i + 1;
-            sheet.getRange(sheetRowErr, cols.errorIdx + 1).setValue(errMsg);
-            errors.push({ bookingId: bookingId, error: errMsg });
+            var errMsg2 = String(e && e.message ? e.message : e);
+            Logger.log("VoucherCreate: Buchung " + bookingId + " fehlgeschlagen: " + errMsg2);
+            sheet.getRange(i + 1, cols.errorIdx + 1).setValue(errMsg2);
+            errors.push({ bookingId: bookingId, error: errMsg2 });
             failed++;
         }
     }
 
     Logger.log(
-        "InvoiceUpload complete: processed=" + processed +
+        "VoucherCreate complete: processed=" + processed +
         ", skipped=" + skipped +
         ", failed=" + failed
     );
@@ -414,5 +563,5 @@ function setupInvoiceUploadTrigger() {
         .atHour(8)
         .create();
 
-    Logger.log("InvoiceUpload trigger created: daily at 08:00 for " + fnName);
+    Logger.log("VoucherCreate trigger created: daily at 08:00 for " + fnName);
 }
