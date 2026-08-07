@@ -59,153 +59,153 @@ function getInvoiceUploadConfig_() {
 }
 
 // ---- Lodgify invoice download (auskommentiert – PDF-Download über Lodgify public API nicht verfügbar) ------
-/*
 
-/**
- * Downloads the invoice document for a reservation from Lodgify.
- *
- * Uses the reservations invoices endpoints to fetch invoice metadata and then
- * downloads the PDF from publicInvoiceLink/pdfLink. Falls back to the legacy
- * direct invoice path for older tenants.
- *
- * @param  {string} bookingId  Lodgify reservation/booking ID.
- * @param  {string} pathTemplate  Path template with {booking_id} placeholder.
- * @return {Blob}  The invoice blob (PDF or other format).
- */
-function getLodgifyInvoicePdf_(bookingId, pathTemplate) {
-    var lodgifyConfig = validateLodgifyConfig();
-    var encodedId = encodeURIComponent(String(bookingId));
-    var invoiceListPath = "/api/v1/reservations/" + encodedId + "/invoices";
-    var invoiceListResponse;
-    var invoiceCandidates = [];
-    var lastError = "no path attempted";
+//
+// /**
+//  * Downloads the invoice document for a reservation from Lodgify.
+//  *
+//  * Uses the reservations invoices endpoints to fetch invoice metadata and then
+//  * downloads the PDF from publicInvoiceLink/pdfLink. Falls back to the legacy
+//  * direct invoice path for older tenants.
+//  *
+//  * @param  {string} bookingId  Lodgify reservation/booking ID.
+//  * @param  {string} pathTemplate  Path template with {booking_id} placeholder.
+//  * @return {Blob}  The invoice blob (PDF or other format).
+//  */
+// function getLodgifyInvoicePdf_(bookingId, pathTemplate) {
+//     var lodgifyConfig = validateLodgifyConfig();
+//     var encodedId = encodeURIComponent(String(bookingId));
+//     var invoiceListPath = "/api/v1/reservations/" + encodedId + "/invoices";
+//     var invoiceListResponse;
+//     var invoiceCandidates = [];
+//     var lastError = "no path attempted";
+//
+//     try {
+//         invoiceListResponse = lodgifyRequest(invoiceListPath, { method: "get" });
+//         invoiceCandidates = normalizeLodgifyList(invoiceListResponse.body);
+//     } catch (e) {
+//         lastError = String(e && e.message ? e.message : e) + " (path: " + invoiceListPath + ")";
+//     }
+//
+//     for (var i = 0; i < invoiceCandidates.length; i++) {
+//         var invoice = invoiceCandidates[i] || {};
+//         var invoiceId = invoice.id || invoice.invoiceId || invoice.invoice_id || "";
+//         var detail = invoice;
+//
+//         if (invoiceId) {
+//             try {
+//                 detail = lodgifyRequest(
+//                     invoiceListPath + "/" + encodeURIComponent(String(invoiceId)),
+//                     { method: "get" }
+//                 ).body || invoice;
+//             } catch (e) {
+//                 lastError = String(e && e.message ? e.message : e) + " (invoiceId: " + invoiceId + ")";
+//             }
+//         }
+//
+//         var docUrl = extractLodgifyInvoiceDocumentUrl_(detail) || extractLodgifyInvoiceDocumentUrl_(invoice);
+//         if (!docUrl) {
+//             lastError = "Invoice metadata contained no publicInvoiceLink/pdfLink for booking " + bookingId;
+//             continue;
+//         }
+//
+//         try {
+//             return fetchLodgifyInvoiceBlobFromUrl_(String(docUrl), lodgifyConfig.apiKey);
+//         } catch (e) {
+//             lastError = String(e && e.message ? e.message : e) + " (docUrl: " + docUrl + ")";
+//         }
+//     }
+//
+//     var template = pathTemplate || "/v1/reservation/booking/{booking_id}/invoice";
+//     var paths = [
+//         template.replace("{booking_id}", encodedId),
+//         "/v2/reservations/bookings/" + encodedId + "/invoice"
+//     ];
+//     var uniquePaths = [];
+//     var seen = {};
+//     paths.forEach(function (p) {
+//         if (!seen[p]) { seen[p] = true; uniquePaths.push(p); }
+//     });
+//
+//     for (var j = 0; j < uniquePaths.length; j++) {
+//         try {
+//             return fetchLegacyLodgifyInvoiceBlob_(uniquePaths[j], lodgifyConfig.apiKey);
+//         } catch (e) {
+//             lastError = String(e && e.message ? e.message : e) + " (path: " + uniquePaths[j] + ")";
+//         }
+//     }
+//
+//     throw new Error("Lodgify invoice download failed for booking " + bookingId + ". Last error: " + lastError);
+// }
+//
+// function extractLodgifyInvoiceDocumentUrl_(invoice) {
+//     if (!invoice || typeof invoice !== "object") return "";
+//     return String(
+//         invoice.publicInvoiceLink ||
+//         invoice.pdfLink ||
+//         invoice.pdf_link ||
+//         invoice.public_invoice_link ||
+//         ""
+//     ).trim();
+// }
+//
+// function fetchLodgifyInvoiceBlobFromUrl_(docUrl, apiKey) {
+//     var response = UrlFetchApp.fetch(String(docUrl), {
+//         method: "get",
+//         muteHttpExceptions: true,
+//         headers: {
+//             "X-ApiKey": apiKey,
+//             "Accept": "application/pdf,application/octet-stream,*/*"
+//         }
+//     });
+//     var status = response.getResponseCode();
+//     if (status < 200 || status >= 300) {
+//         throw new Error("Document URL fetch failed (" + status + "): " + docUrl);
+//     }
+//     return response.getBlob();
+// }
+//
+// function fetchLegacyLodgifyInvoiceBlob_(path, apiKey) {
+//     var url = lodgifyBuildUrl(path);
+//     var response = UrlFetchApp.fetch(url, {
+//         method: "get",
+//         muteHttpExceptions: true,
+//         headers: {
+//             "X-ApiKey": apiKey,
+//             "Accept": "application/pdf,application/octet-stream,application/json,*/*"
+//         }
+//     });
+//
+//     var status = response.getResponseCode();
+//     if (status < 200 || status >= 300) {
+//         throw new Error("HTTP " + status + " at " + path + ": " + response.getContentText());
+//     }
+//
+//     var contentType = String(
+//         (response.getAllHeaders()["Content-Type"] || response.getAllHeaders()["content-type"]) || ""
+//     ).toLowerCase();
+//
+//     if (contentType.indexOf("application/json") !== -1 || contentType.indexOf("text/") !== -1) {
+//         var bodyText = response.getContentText() || "";
+//         var parsed;
+//         try { parsed = JSON.parse(bodyText); } catch (e) { parsed = null; }
+//
+//         var docUrl = parsed
+//             ? (parsed.url || parsed.invoice_url || parsed.document_url ||
+//                parsed.download_url || parsed.pdf_url || parsed.pdfUrl || "")
+//             : "";
+//
+//         if (!docUrl) {
+//             throw new Error("JSON response at " + path + " contained no downloadable URL. Body: " + bodyText.slice(0, 200));
+//         }
+//
+//         return fetchLodgifyInvoiceBlobFromUrl_(String(docUrl), apiKey);
+//     }
+//
+//     return response.getBlob();
+// }
+//
 
-    try {
-        invoiceListResponse = lodgifyRequest(invoiceListPath, { method: "get" });
-        invoiceCandidates = normalizeLodgifyList(invoiceListResponse.body);
-    } catch (e) {
-        lastError = String(e && e.message ? e.message : e) + " (path: " + invoiceListPath + ")";
-    }
-
-    for (var i = 0; i < invoiceCandidates.length; i++) {
-        var invoice = invoiceCandidates[i] || {};
-        var invoiceId = invoice.id || invoice.invoiceId || invoice.invoice_id || "";
-        var detail = invoice;
-
-        if (invoiceId) {
-            try {
-                detail = lodgifyRequest(
-                    invoiceListPath + "/" + encodeURIComponent(String(invoiceId)),
-                    { method: "get" }
-                ).body || invoice;
-            } catch (e) {
-                lastError = String(e && e.message ? e.message : e) + " (invoiceId: " + invoiceId + ")";
-            }
-        }
-
-        var docUrl = extractLodgifyInvoiceDocumentUrl_(detail) || extractLodgifyInvoiceDocumentUrl_(invoice);
-        if (!docUrl) {
-            lastError = "Invoice metadata contained no publicInvoiceLink/pdfLink for booking " + bookingId;
-            continue;
-        }
-
-        try {
-            return fetchLodgifyInvoiceBlobFromUrl_(String(docUrl), lodgifyConfig.apiKey);
-        } catch (e) {
-            lastError = String(e && e.message ? e.message : e) + " (docUrl: " + docUrl + ")";
-        }
-    }
-
-    var template = pathTemplate || "/v1/reservation/booking/{booking_id}/invoice";
-    var paths = [
-        template.replace("{booking_id}", encodedId),
-        "/v2/reservations/bookings/" + encodedId + "/invoice"
-    ];
-    var uniquePaths = [];
-    var seen = {};
-    paths.forEach(function (p) {
-        if (!seen[p]) { seen[p] = true; uniquePaths.push(p); }
-    });
-
-    for (var j = 0; j < uniquePaths.length; j++) {
-        try {
-            return fetchLegacyLodgifyInvoiceBlob_(uniquePaths[j], lodgifyConfig.apiKey);
-        } catch (e) {
-            lastError = String(e && e.message ? e.message : e) + " (path: " + uniquePaths[j] + ")";
-        }
-    }
-
-    throw new Error("Lodgify invoice download failed for booking " + bookingId + ". Last error: " + lastError);
-}
-
-function extractLodgifyInvoiceDocumentUrl_(invoice) {
-    if (!invoice || typeof invoice !== "object") return "";
-    return String(
-        invoice.publicInvoiceLink ||
-        invoice.pdfLink ||
-        invoice.pdf_link ||
-        invoice.public_invoice_link ||
-        ""
-    ).trim();
-}
-
-function fetchLodgifyInvoiceBlobFromUrl_(docUrl, apiKey) {
-    var response = UrlFetchApp.fetch(String(docUrl), {
-        method: "get",
-        muteHttpExceptions: true,
-        headers: {
-            "X-ApiKey": apiKey,
-            "Accept": "application/pdf,application/octet-stream,*/*"
-        }
-    });
-    var status = response.getResponseCode();
-    if (status < 200 || status >= 300) {
-        throw new Error("Document URL fetch failed (" + status + "): " + docUrl);
-    }
-    return response.getBlob();
-}
-
-function fetchLegacyLodgifyInvoiceBlob_(path, apiKey) {
-    var url = lodgifyBuildUrl(path);
-    var response = UrlFetchApp.fetch(url, {
-        method: "get",
-        muteHttpExceptions: true,
-        headers: {
-            "X-ApiKey": apiKey,
-            "Accept": "application/pdf,application/octet-stream,application/json,*/*"
-        }
-    });
-
-    var status = response.getResponseCode();
-    if (status < 200 || status >= 300) {
-        throw new Error("HTTP " + status + " at " + path + ": " + response.getContentText());
-    }
-
-    var contentType = String(
-        (response.getAllHeaders()["Content-Type"] || response.getAllHeaders()["content-type"]) || ""
-    ).toLowerCase();
-
-    if (contentType.indexOf("application/json") !== -1 || contentType.indexOf("text/") !== -1) {
-        var bodyText = response.getContentText() || "";
-        var parsed;
-        try { parsed = JSON.parse(bodyText); } catch (e) { parsed = null; }
-
-        var docUrl = parsed
-            ? (parsed.url || parsed.invoice_url || parsed.document_url ||
-               parsed.download_url || parsed.pdf_url || parsed.pdfUrl || "")
-            : "";
-
-        if (!docUrl) {
-            throw new Error("JSON response at " + path + " contained no downloadable URL. Body: " + bodyText.slice(0, 200));
-        }
-
-        return fetchLodgifyInvoiceBlobFromUrl_(String(docUrl), apiKey);
-    }
-
-    return response.getBlob();
-}
-
-*/
 
 // ---- Lexware contact helper --------------------------------
 
@@ -265,18 +265,21 @@ function findOrCreateLexwareContactByGuestName_(guestName) {
 
     // Not found – create a new customer contact
     var nameParts = name.split(" ");
-    var firstName = nameParts.slice(0, -1).join(" ") || name;
-    var lastName  = nameParts.length > 1 ? nameParts[nameParts.length - 1] : "";
+    var firstName, lastName;
+    if (nameParts.length === 1) {
+        // Single-word name: store entirely as lastName (common for surnames only)
+        firstName = "";
+        lastName  = nameParts[0];
+    } else {
+        firstName = nameParts.slice(0, -1).join(" ");
+        lastName  = nameParts[nameParts.length - 1];
+    }
 
-    var newContact = {
-        roles: { customer: {} },
-        person: {
-            firstName: firstName,
-            lastName:  lastName || undefined
-        }
-    };
+    var newContactPayload = { roles: { customer: {} }, person: {} };
+    if (firstName) newContactPayload.person.firstName = firstName;
+    if (lastName)  newContactPayload.person.lastName  = lastName;
 
-    var createResult = lexwarePostRequest_("/contacts", newContact);
+    var createResult = lexwarePostRequest_("/contacts", newContactPayload);
     var created = createResult.body || {};
     var newId = String(created.id || "");
     if (!newId) {
@@ -458,7 +461,14 @@ function processLodgifyInvoiceUploadToLexware() {
         // Compute line item amounts (minimum 0.01 € for item 1)
         var serviceAmount   = 50;
         var einnahmenAmount = round2(totalAmount - serviceAmount);
-        if (einnahmenAmount < 0) einnahmenAmount = 0;
+        if (einnahmenAmount < 0) {
+            Logger.log(
+                "VoucherCreate: Buchung " + bookingId +
+                " – Gesamtbetrag (" + totalAmount + " €) kleiner als Dienstleistungsanteil (" +
+                serviceAmount + " €). Einnahmen-Position wird mit 0 € erstellt."
+            );
+            einnahmenAmount = 0;
+        }
 
         // Belegdatum = trigger date (= checkin − daysBeforeCheckin)
         var voucherDateStr = Utilities.formatDate(
