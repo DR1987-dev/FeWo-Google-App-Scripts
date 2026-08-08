@@ -766,7 +766,7 @@ var LODGIFY_ITEM_COMPLETENESS_WEIGHTS_ = {
 
 // Typwerte, die einen geschlossenen Zeitraum / Eigentümer-Sperre identifizieren.
 var LODGIFY_OWNER_BLOCK_TYPE_TOKENS_ = [
-    "owner", "unavailable", "block_off", "blocked", "closed_period", "maintenance"
+    "owner", "unavailable", "block_off", "blockoff", "blocked", "closed_period", "ownerblock", "maintenance"
 ];
 
 function scoreLodgifyItemCompleteness_(item) {
@@ -1052,6 +1052,19 @@ function isConfirmedBooking_(item, excludeDeclinedCancelled) {
     // Geschlossene Zeiträume können auch über den Typ identifiziert werden.
     for (let i = 0; i < LODGIFY_OWNER_BLOCK_TYPE_TOKENS_.length; i++) {
         if (type && type.indexOf(LODGIFY_OWNER_BLOCK_TYPE_TOKENS_[i]) !== -1) return false;
+    }
+
+    // Wenn kein bekannter Typ gesetzt ist, können geschlossene Perioden (Eigentümer-Sperren)
+    // anhand fehlender Gastdaten und Betrag 0 erkannt werden. Lodgify liefert solche Einträge
+    // teils ohne Typ-Feld zurück, aber sie enthalten weder einen Gastnamen noch einen Betrag.
+    if (!type) {
+        const guestName = extractLodgifyGuestName_(item);
+        if (!guestName) {
+            const amount = extractAmountForAudit_(item);
+            if (!amount) {
+                return false;
+            }
+        }
     }
 
     const status = String(firstDefined(item, [
