@@ -1514,11 +1514,15 @@ function applyPaymentRequestUpdates_(sheetName, itemsById, config) {
         const sheetRow = i + 1; // 1-basiert
         const paymentTriggerResult = triggerLodgifyPaymentUpdate_(enrichedBooking);
         if (!paymentTriggerResult || paymentTriggerResult.ok !== true) {
-            // Read-only-Quelle (z.B. Booking.com): Buchung überspringen, kein Fehler werfen.
+            // Read-only-Quelle (z.B. Booking.com): IsExternal auf FALSE setzen, damit
+            // die Buchung in zukünftigen Läufen automatisch übersprungen wird.
             if (paymentTriggerResult && paymentTriggerResult.readOnly) {
                 Logger.log(
-                    `ℹ️ AlleBuchungen Zahlungsupdate: Buchung ${bookingId} übersprungen – stammt aus read-only-Quelle (${paymentTriggerResult.source || "unbekannt"}).`
+                    `ℹ️ AlleBuchungen Zahlungsupdate: Buchung ${bookingId} stammt aus read-only-Quelle (${paymentTriggerResult.source || "unbekannt"}) – setze IsExternal=FALSE.`
                 );
+                if (isExternalColIdx !== -1) {
+                    sheet.getRange(sheetRow, isExternalColIdx + 1).setValue("FALSE");
+                }
                 skippedIneligible++;
                 continue;
             }
