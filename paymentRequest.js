@@ -775,7 +775,7 @@ function createLodgifyPaymentLink_(bookingId, amount) {
     }
     const path = "/v2/reservations/bookings/" + encodeURIComponent(bookingId) + "/quote/paymentLink";
     const url = lodgifyBuildUrl(path, null);
-    const payload = JSON.stringify({ amount: Number(normalizedAmount.toFixed(2)) });
+    const payload = JSON.stringify({ amount: Number(normalizedAmount.toFixed(2)), readOnly: false });
 
     const fetchOptions = {
         method: "post",
@@ -803,21 +803,6 @@ function createLodgifyPaymentLink_(bookingId, amount) {
     const bodyText = response.getContentText() || "";
 
     if (status < 200 || status >= 300) {
-        // Buchungen aus read-only-Quellen (z.B. Booking.com) liefern 403 mit Code 960.
-        // Diese können nicht per API geändert werden – als "readOnly" zurückgeben, nicht werfen.
-        if (status === 403) {
-            let parsedBody = null;
-            try { parsedBody = JSON.parse(bodyText); } catch (e) { /* ignorieren */ }
-            if (parsedBody && parsedBody.code === 960) {
-                const sourceName = (parsedBody.message || "").match(/read-only source (\w+)/i);
-                const source = sourceName ? sourceName[1] : "unbekannt";
-                Logger.log(
-                    "ℹ️ Buchung " + bookingId + " stammt aus read-only-Quelle (" + source +
-                    ") und wird für die Zahlungslink-Erstellung übersprungen."
-                );
-                return { ok: false, readOnly: true, status: 403, source: source };
-            }
-        }
         throw new Error(
             "Lodgify Zahlungslink-Erstellung fehlgeschlagen (" + status + ") für Buchung " + bookingId + ": " + bodyText
         );
@@ -1080,10 +1065,6 @@ function triggerLodgifyPaymentUpdate_(booking) {
 
     const linkResult = createLodgifyPaymentLink_(bookingId, amount);
     if (!linkResult || linkResult.ok !== true) {
-        // Read-only-Quellen (z.B. Booking.com): kein Fehler, Buchung überspringen.
-        if (linkResult && linkResult.readOnly) {
-            return { ok: false, readOnly: true, bookingId: bookingId, source: linkResult.source };
-        }
         throw new Error(
             "Lodgify Zahlungslink konnte nicht erstellt werden (Buchung " + bookingId + ")."
         );
@@ -1514,18 +1495,6 @@ function applyPaymentRequestUpdates_(sheetName, itemsById, config) {
         const sheetRow = i + 1; // 1-basiert
         const paymentTriggerResult = triggerLodgifyPaymentUpdate_(enrichedBooking);
         if (!paymentTriggerResult || paymentTriggerResult.ok !== true) {
-            // Read-only-Quelle (z.B. Booking.com): IsExternal auf FALSE setzen, damit
-            // die Buchung in zukünftigen Läufen automatisch übersprungen wird.
-            if (paymentTriggerResult && paymentTriggerResult.readOnly) {
-                Logger.log(
-                    `ℹ️ AlleBuchungen Zahlungsupdate: Buchung ${bookingId} stammt aus read-only-Quelle (${paymentTriggerResult.source || "unbekannt"}) – setze IsExternal=FALSE.`
-                );
-                if (isExternalColIdx !== -1) {
-                    sheet.getRange(sheetRow, isExternalColIdx + 1).setValue("FALSE");
-                }
-                skippedIneligible++;
-                continue;
-            }
             const status = paymentTriggerResult && paymentTriggerResult.status ? `status=${paymentTriggerResult.status}` : "status=unbekannt";
             const detail = paymentTriggerResult && paymentTriggerResult.paymentUrl ? `paymentUrl=${paymentTriggerResult.paymentUrl}` : "paymentUrl=unbekannt";
             throw new Error(`Lodgify Zahlungsanforderung für Buchung ${bookingId} fehlgeschlagen (${status}, ${detail}).`);
