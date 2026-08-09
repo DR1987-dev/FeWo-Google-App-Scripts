@@ -1589,7 +1589,14 @@ function applyPaymentRequestUpdates_(sheetName, itemsById, config) {
             const warning = `⚠️ AlleBuchungen Zahlungsupdate fehlgeschlagen für Buchung ${bookingId} (Zeile ${sheetRow}): ${message}`;
             Logger.log(warning);
             if (failureMessages.length < PAYMENT_REQUEST_FAILURE_NOTIFICATION_DETAIL_LIMIT_) {
-                failureMessages.push(`- Buchung ${bookingId} (Zeile ${sheetRow}): ${message}`);
+                const guestName = String(extractLodgifyGuestName_(enrichedBooking) || enrichedBooking.guest_name || "").trim();
+                const checkinDate = extractLodgifyCheckinDate_(enrichedBooking);
+                const checkoutDate = extractLodgifyCheckoutDate_(enrichedBooking);
+                const period = (checkinDate && checkoutDate)
+                    ? ` (${checkinDate} – ${checkoutDate})`
+                    : (checkinDate ? ` (ab ${checkinDate})` : "");
+                const guestInfo = guestName ? ` | Gast: ${guestName}${period}` : (period ? ` | Zeitraum:${period}` : "");
+                failureMessages.push(`- Buchung ${bookingId} (Zeile ${sheetRow})${guestInfo}: ${message}`);
             } else if (!failureDetailsTruncated) {
                 failureDetailsTruncated = true;
             }
