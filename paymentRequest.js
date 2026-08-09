@@ -76,6 +76,7 @@ var DECLINED_OR_CANCELLED_STATUS_PATTERNS_ = [
     /\babgelehnt\b/,
     /\babgesagt\b/
 ];
+var PAYMENT_REQUEST_FAILURE_NOTIFICATION_DETAIL_LIMIT_ = 25;
 
 /**
  * Wandelt einen Wert in einen Boolean um.
@@ -105,6 +106,74 @@ function getPaymentRequestConfig_() {
     }
 
     return { sheetName, daysBeforeCheckin };
+}
+
+function getPaymentRequestErrorNotificationRecipients_() {
+    const props = PropertiesService.getScriptProperties();
+    const rawRecipients = String(
+        props.getProperty("PAYMENT_REQUEST_ERROR_NOTIFY_EMAILS")
+        || props.getProperty("PAYMENT_REQUEST_ALERT_EMAILS")
+        || props.getProperty("ALERT_EMAIL")
+        || ""
+    ).trim();
+
+    if (rawRecipients) {
+        return rawRecipients
+            .split(/[,\s;]+/)
+            .map(function (item) { return String(item || "").trim(); })
+            .filter(function (item) { return item !== ""; });
+    }
+
+    const effectiveUserEmail = String(
+        (Session.getEffectiveUser && Session.getEffectiveUser().getEmail())
+        || ""
+    ).trim();
+    return effectiveUserEmail ? [effectiveUserEmail] : [];
+}
+
+function sendPaymentRequestErrorNotification_(summary) {
+    const recipients = getPaymentRequestErrorNotificationRecipients_();
+    if (!recipients.length) {
+        Logger.log("⚠️ Keine Empfänger für PAYMENT_REQUEST_ERROR_NOTIFY_EMAILS konfiguriert.");
+        return { ok: false, reason: "missingRecipients" };
+    }
+
+    const normalizedSummary = summary || {};
+    const sheetName = normalizedSummary.sheetName === undefined || normalizedSummary.sheetName === null
+        ? ""
+        : String(normalizedSummary.sheetName);
+    const applied = Number(normalizedSummary.applied === undefined || normalizedSummary.applied === null ? 0 : normalizedSummary.applied);
+    const failed = Number(normalizedSummary.failed === undefined || normalizedSummary.failed === null ? 0 : normalizedSummary.failed);
+    const details = normalizedSummary.details === undefined || normalizedSummary.details === null
+        ? "Keine Details vorhanden."
+        : String(normalizedSummary.details);
+
+    const lines = [
+        "Automatisches Lodgify Zahlungsupdate: Fehler aufgetreten.",
+        "",
+        "Zeitpunkt: " + new Date().toISOString(),
+        "Sheet: " + sheetName,
+        "Angewendet: " + applied,
+        "Fehlgeschlagen: " + failed,
+        "",
+        "Fehlerdetails:",
+        details
+    ];
+
+    try {
+        MailApp.sendEmail({
+            to: recipients.join(","),
+            subject: "⚠️ Lodgify Zahlungsupdate fehlgeschlagen",
+            body: lines.join("\n")
+        });
+        return { ok: true, reason: "sent" };
+    } catch (mailErr) {
+        Logger.log(
+            "⚠️ Versand der Fehlerbenachrichtigung fehlgeschlagen: " +
+            String(mailErr && mailErr.message ? mailErr.message : mailErr)
+        );
+        return { ok: false, reason: "sendFailed" };
+    }
 }
 
 /**
@@ -1413,13 +1482,13 @@ function upsertAlleBuchungenFromItems_(sheetName, items, rawItems) {
  */
 function applyPaymentRequestUpdates_(sheetName, itemsById, config) {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    if (!ss) return { applied: 0, skippedNoData: 0, skippedWindow: 0, skippedAlreadyRequested: 0, skippedIneligible: 0 };
+    if (!ss) return { applied: 0, failed: 0, skippedNoData: 0, skippedWindow: 0, skippedAlreadyRequested: 0, skippedIneligible: 0 };
 
     const sheet = ss.getSheetByName(sheetName);
-    if (!sheet) return { applied: 0, skippedNoData: 0, skippedWindow: 0, skippedAlreadyRequested: 0, skippedIneligible: 0 };
+    if (!sheet) return { applied: 0, failed: 0, skippedNoData: 0, skippedWindow: 0, skippedAlreadyRequested: 0, skippedIneligible: 0 };
 
     const lastRow = sheet.getLastRow();
-    if (lastRow < 2) return { applied: 0, skippedNoData: 0, skippedWindow: 0, skippedAlreadyRequested: 0, skippedIneligible: 0 };
+    if (lastRow < 2) return { applied: 0, failed: 0, skippedNoData: 0, skippedWindow: 0, skippedAlreadyRequested: 0, skippedIneligible: 0 };
 
     const numCols = sheet.getLastColumn();
     const allData = sheet.getRange(1, 1, lastRow, numCols).getValues();
@@ -1437,14 +1506,17 @@ function applyPaymentRequestUpdates_(sheetName, itemsById, config) {
         Logger.log(
             "⚠️ AlleBuchungen: Benötigte Spalte LodgifyBookingId nicht gefunden."
         );
-        return { applied: 0, skippedNoData: 0, skippedWindow: 0, skippedAlreadyRequested: 0, skippedIneligible: 0 };
+        return { applied: 0, failed: 0, skippedNoData: 0, skippedWindow: 0, skippedAlreadyRequested: 0, skippedIneligible: 0 };
     }
 
     let applied = 0;
+    let failed = 0;
     let skippedNoData = 0;
     let skippedWindow = 0;
     let skippedAlreadyRequested = 0;
     let skippedIneligible = 0;
+    const failureMessages = [];
+    let failureDetailsTruncated = false;
 
     for (let i = 1; i < allData.length; i++) {
         const row = allData[i];
@@ -1493,29 +1565,75 @@ function applyPaymentRequestUpdates_(sheetName, itemsById, config) {
         }
 
         const sheetRow = i + 1; // 1-basiert
-        const paymentTriggerResult = triggerLodgifyPaymentUpdate_(enrichedBooking);
-        if (!paymentTriggerResult || paymentTriggerResult.ok !== true) {
-            const status = paymentTriggerResult && paymentTriggerResult.status ? `status=${paymentTriggerResult.status}` : "status=unbekannt";
-            const detail = paymentTriggerResult && paymentTriggerResult.paymentUrl ? `paymentUrl=${paymentTriggerResult.paymentUrl}` : "paymentUrl=unbekannt";
-            throw new Error(`Lodgify Zahlungsanforderung für Buchung ${bookingId} fehlgeschlagen (${status}, ${detail}).`);
-        }
+        try {
+            const paymentTriggerResult = triggerLodgifyPaymentUpdate_(enrichedBooking);
+            if (!paymentTriggerResult || paymentTriggerResult.ok !== true) {
+                const status = paymentTriggerResult && paymentTriggerResult.status ? `status=${paymentTriggerResult.status}` : "status=unbekannt";
+                const detail = paymentTriggerResult && paymentTriggerResult.paymentUrl ? `paymentUrl=${paymentTriggerResult.paymentUrl}` : "paymentUrl=unbekannt";
+                throw new Error(`Lodgify Zahlungsanforderung für Buchung ${bookingId} fehlgeschlagen (${status}, ${detail}).`);
+            }
 
-        if (timestampColIdx !== -1) {
-            sheet.getRange(sheetRow, timestampColIdx + 1).setValue(
-                buildPaymentRequestTimestamp_()
+            if (timestampColIdx !== -1) {
+                sheet.getRange(sheetRow, timestampColIdx + 1).setValue(
+                    buildPaymentRequestTimestamp_()
+                );
+            }
+
+            Logger.log(
+                `✅ AlleBuchungen Zahlungsupdate: Buchung ${bookingId} (Zeile ${sheetRow}) in Lodgify angefordert.`
             );
+            applied++;
+        } catch (err) {
+            failed++;
+            const message = String(err && err.message ? err.message : err);
+            const warning = `⚠️ AlleBuchungen Zahlungsupdate fehlgeschlagen für Buchung ${bookingId} (Zeile ${sheetRow}): ${message}`;
+            Logger.log(warning);
+            if (failureMessages.length < PAYMENT_REQUEST_FAILURE_NOTIFICATION_DETAIL_LIMIT_) {
+                failureMessages.push(`- Buchung ${bookingId} (Zeile ${sheetRow}): ${message}`);
+            } else if (!failureDetailsTruncated) {
+                failureDetailsTruncated = true;
+            }
         }
+    }
 
-        Logger.log(
-            `✅ AlleBuchungen Zahlungsupdate: Buchung ${bookingId} (Zeile ${sheetRow}) in Lodgify angefordert.`
-        );
-        applied++;
+    let notificationStatus = { ok: false, reason: "notRequired" };
+    if (failed > 0) {
+        notificationStatus = sendPaymentRequestErrorNotification_({
+            sheetName: sheetName,
+            applied: applied,
+            failed: failed,
+            details: failureMessages.concat(
+                failureDetailsTruncated ? ["- ... (weitere Fehler wurden nicht aufgeführt)"] : []
+            ).join("\n")
+        });
+        if (!notificationStatus.ok) {
+            if (notificationStatus.reason === "missingRecipients") {
+                Logger.log(
+                    "⚠️ Fehlerbenachrichtigung für Zahlungsupdates konnte nicht versendet werden. " +
+                    "Bitte PAYMENT_REQUEST_ERROR_NOTIFY_EMAILS prüfen."
+                );
+            } else {
+                Logger.log(
+                    "⚠️ Fehlerbenachrichtigung für Zahlungsupdates konnte nicht versendet werden. " +
+                    "Grund: " + String(notificationStatus.reason || "unbekannt")
+                );
+            }
+        }
     }
 
     Logger.log(
-        `AlleBuchungen Zahlungsupdate: applied=${applied}, skippedWindow=${skippedWindow}, skippedNoData=${skippedNoData}, skippedAlreadyRequested=${skippedAlreadyRequested}, skippedIneligible=${skippedIneligible}`
+        `AlleBuchungen Zahlungsupdate: applied=${applied}, failed=${failed}, skippedWindow=${skippedWindow}, skippedNoData=${skippedNoData}, skippedAlreadyRequested=${skippedAlreadyRequested}, skippedIneligible=${skippedIneligible}, notificationSent=${notificationStatus.ok}, notificationReason=${notificationStatus.reason}`
     );
-    return { applied, skippedNoData, skippedWindow, skippedAlreadyRequested, skippedIneligible };
+    return {
+        applied,
+        failed,
+        skippedNoData,
+        skippedWindow,
+        skippedAlreadyRequested,
+        skippedIneligible,
+        notificationSent: notificationStatus.ok,
+        notificationReason: notificationStatus.reason
+    };
 }
 
 /**
