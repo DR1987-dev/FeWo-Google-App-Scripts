@@ -1057,13 +1057,11 @@ function isConfirmedBooking_(item, excludeDeclinedCancelled) {
     // Geschlossene Perioden (Eigentümer-Sperren) erkennen: Lodgify liefert solche Einträge
     // teils ohne Typ-Feld, aber auch mit Typ. Entscheidendes Merkmal ist, dass weder ein
     // Gastname noch ein Betrag vorhanden ist. Diese Prüfung erfolgt unabhängig vom Typ-Feld.
-    {
-        const guestName = extractLodgifyGuestName_(item);
-        if (!guestName) {
-            const amount = extractAmountForAudit_(item);
-            if (!amount) {
-                return false;
-            }
+    const guestNameForFilter = extractLodgifyGuestName_(item);
+    if (!guestNameForFilter) {
+        const amountForFilter = extractAmountForAudit_(item);
+        if (!amountForFilter) {
+            return false;
         }
     }
 
