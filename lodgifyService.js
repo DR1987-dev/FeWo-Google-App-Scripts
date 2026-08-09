@@ -1054,10 +1054,10 @@ function isConfirmedBooking_(item, excludeDeclinedCancelled) {
         if (type && type.indexOf(LODGIFY_OWNER_BLOCK_TYPE_TOKENS_[i]) !== -1) return false;
     }
 
-    // Wenn kein bekannter Typ gesetzt ist, können geschlossene Perioden (Eigentümer-Sperren)
-    // anhand fehlender Gastdaten und Betrag 0 erkannt werden. Lodgify liefert solche Einträge
-    // teils ohne Typ-Feld zurück, aber sie enthalten weder einen Gastnamen noch einen Betrag.
-    if (!type) {
+    // Geschlossene Perioden (Eigentümer-Sperren) erkennen: Lodgify liefert solche Einträge
+    // teils ohne Typ-Feld, aber auch mit Typ. Entscheidendes Merkmal ist, dass weder ein
+    // Gastname noch ein Betrag vorhanden ist. Diese Prüfung erfolgt unabhängig vom Typ-Feld.
+    {
         const guestName = extractLodgifyGuestName_(item);
         if (!guestName) {
             const amount = extractAmountForAudit_(item);
@@ -1376,9 +1376,11 @@ function normalizeGuestNameValue_(value) {
             return nestedName.trim();
         }
 
-        const firstName = firstDefined(value, ["firstName", "first_name"]);
-        const lastName = firstDefined(value, ["lastName", "last_name"]);
-        const combined = `${String(firstName || "").trim()} ${String(lastName || "").trim()}`.trim();
+        const firstNameRaw = firstDefined(value, ["firstName", "first_name"]);
+        const lastNameRaw = firstDefined(value, ["lastName", "last_name"]);
+        const firstNameStr = typeof firstNameRaw === "string" ? firstNameRaw.trim() : "";
+        const lastNameStr = typeof lastNameRaw === "string" ? lastNameRaw.trim() : "";
+        const combined = `${firstNameStr} ${lastNameStr}`.trim();
         if (combined) return combined;
     }
 
