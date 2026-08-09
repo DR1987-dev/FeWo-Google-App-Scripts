@@ -107,6 +107,64 @@ function getPaymentRequestConfig_() {
     return { sheetName, daysBeforeCheckin };
 }
 
+function getPaymentRequestErrorNotificationRecipients_() {
+    const props = PropertiesService.getScriptProperties();
+    const rawRecipients = String(
+        props.getProperty("PAYMENT_REQUEST_ERROR_NOTIFY_EMAILS")
+        || props.getProperty("PAYMENT_REQUEST_ALERT_EMAILS")
+        || props.getProperty("ALERT_EMAIL")
+        || ""
+    ).trim();
+
+    if (rawRecipients) {
+        return rawRecipients
+            .split(/[,\s;]+/)
+            .map(function (item) { return String(item || "").trim(); })
+            .filter(function (item) { return item !== ""; });
+    }
+
+    const effectiveUserEmail = String(
+        (Session.getEffectiveUser && Session.getEffectiveUser().getEmail())
+        || ""
+    ).trim();
+    return effectiveUserEmail ? [effectiveUserEmail] : [];
+}
+
+function sendPaymentRequestErrorNotification_(summary) {
+    const recipients = getPaymentRequestErrorNotificationRecipients_();
+    if (!recipients.length) {
+        Logger.log("⚠️ Keine Empfänger für PAYMENT_REQUEST_ERROR_NOTIFY_EMAILS konfiguriert.");
+        return false;
+    }
+
+    const lines = [
+        "Automatisches Lodgify Zahlungsupdate: Fehler aufgetreten.",
+        "",
+        "Zeitpunkt: " + new Date().toISOString(),
+        "Sheet: " + String(summary && summary.sheetName || ""),
+        "Angewendet: " + Number(summary && summary.applied || 0),
+        "Fehlgeschlagen: " + Number(summary && summary.failed || 0),
+        "",
+        "Fehlerdetails:",
+        String(summary && summary.details || "Keine Details vorhanden.")
+    ];
+
+    try {
+        MailApp.sendEmail({
+            to: recipients.join(","),
+            subject: "⚠️ Lodgify Zahlungsupdate fehlgeschlagen",
+            body: lines.join("\n")
+        });
+        return true;
+    } catch (mailErr) {
+        Logger.log(
+            "⚠️ Versand der Fehlerbenachrichtigung fehlgeschlagen: " +
+            String(mailErr && mailErr.message ? mailErr.message : mailErr)
+        );
+        return false;
+    }
+}
+
 /**
  * Prüft, ob das aktuelle Datum im Zahlungsaufforderungs-Fenster liegt.
  * Das Fenster beginnt `daysBeforeCheckin` Tage vor dem CheckIn.
@@ -1413,13 +1471,13 @@ function upsertAlleBuchungenFromItems_(sheetName, items, rawItems) {
  */
 function applyPaymentRequestUpdates_(sheetName, itemsById, config) {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    if (!ss) return { applied: 0, skippedNoData: 0, skippedWindow: 0, skippedAlreadyRequested: 0, skippedIneligible: 0 };
+    if (!ss) return { applied: 0, failed: 0, skippedNoData: 0, skippedWindow: 0, skippedAlreadyRequested: 0, skippedIneligible: 0 };
 
     const sheet = ss.getSheetByName(sheetName);
-    if (!sheet) return { applied: 0, skippedNoData: 0, skippedWindow: 0, skippedAlreadyRequested: 0, skippedIneligible: 0 };
+    if (!sheet) return { applied: 0, failed: 0, skippedNoData: 0, skippedWindow: 0, skippedAlreadyRequested: 0, skippedIneligible: 0 };
 
     const lastRow = sheet.getLastRow();
-    if (lastRow < 2) return { applied: 0, skippedNoData: 0, skippedWindow: 0, skippedAlreadyRequested: 0, skippedIneligible: 0 };
+    if (lastRow < 2) return { applied: 0, failed: 0, skippedNoData: 0, skippedWindow: 0, skippedAlreadyRequested: 0, skippedIneligible: 0 };
 
     const numCols = sheet.getLastColumn();
     const allData = sheet.getRange(1, 1, lastRow, numCols).getValues();
@@ -1437,14 +1495,16 @@ function applyPaymentRequestUpdates_(sheetName, itemsById, config) {
         Logger.log(
             "⚠️ AlleBuchungen: Benötigte Spalte LodgifyBookingId nicht gefunden."
         );
-        return { applied: 0, skippedNoData: 0, skippedWindow: 0, skippedAlreadyRequested: 0, skippedIneligible: 0 };
+        return { applied: 0, failed: 0, skippedNoData: 0, skippedWindow: 0, skippedAlreadyRequested: 0, skippedIneligible: 0 };
     }
 
     let applied = 0;
+    let failed = 0;
     let skippedNoData = 0;
     let skippedWindow = 0;
     let skippedAlreadyRequested = 0;
     let skippedIneligible = 0;
+    const failureMessages = [];
 
     for (let i = 1; i < allData.length; i++) {
         const row = allData[i];
@@ -1493,29 +1553,49 @@ function applyPaymentRequestUpdates_(sheetName, itemsById, config) {
         }
 
         const sheetRow = i + 1; // 1-basiert
-        const paymentTriggerResult = triggerLodgifyPaymentUpdate_(enrichedBooking);
-        if (!paymentTriggerResult || paymentTriggerResult.ok !== true) {
-            const status = paymentTriggerResult && paymentTriggerResult.status ? `status=${paymentTriggerResult.status}` : "status=unbekannt";
-            const detail = paymentTriggerResult && paymentTriggerResult.paymentUrl ? `paymentUrl=${paymentTriggerResult.paymentUrl}` : "paymentUrl=unbekannt";
-            throw new Error(`Lodgify Zahlungsanforderung für Buchung ${bookingId} fehlgeschlagen (${status}, ${detail}).`);
-        }
+        try {
+            const paymentTriggerResult = triggerLodgifyPaymentUpdate_(enrichedBooking);
+            if (!paymentTriggerResult || paymentTriggerResult.ok !== true) {
+                const status = paymentTriggerResult && paymentTriggerResult.status ? `status=${paymentTriggerResult.status}` : "status=unbekannt";
+                const detail = paymentTriggerResult && paymentTriggerResult.paymentUrl ? `paymentUrl=${paymentTriggerResult.paymentUrl}` : "paymentUrl=unbekannt";
+                throw new Error(`Lodgify Zahlungsanforderung für Buchung ${bookingId} fehlgeschlagen (${status}, ${detail}).`);
+            }
 
-        if (timestampColIdx !== -1) {
-            sheet.getRange(sheetRow, timestampColIdx + 1).setValue(
-                buildPaymentRequestTimestamp_()
+            if (timestampColIdx !== -1) {
+                sheet.getRange(sheetRow, timestampColIdx + 1).setValue(
+                    buildPaymentRequestTimestamp_()
+                );
+            }
+
+            Logger.log(
+                `✅ AlleBuchungen Zahlungsupdate: Buchung ${bookingId} (Zeile ${sheetRow}) in Lodgify angefordert.`
             );
+            applied++;
+        } catch (err) {
+            failed++;
+            const message = String(err && err.message ? err.message : err);
+            const warning = `⚠️ AlleBuchungen Zahlungsupdate fehlgeschlagen für Buchung ${bookingId} (Zeile ${sheetRow}): ${message}`;
+            Logger.log(warning);
+            if (failureMessages.length < 25) {
+                failureMessages.push(`- Buchung ${bookingId} (Zeile ${sheetRow}): ${message}`);
+            }
         }
+    }
 
-        Logger.log(
-            `✅ AlleBuchungen Zahlungsupdate: Buchung ${bookingId} (Zeile ${sheetRow}) in Lodgify angefordert.`
-        );
-        applied++;
+    let notificationSent = false;
+    if (failed > 0) {
+        notificationSent = sendPaymentRequestErrorNotification_({
+            sheetName: sheetName,
+            applied: applied,
+            failed: failed,
+            details: failureMessages.join("\n")
+        });
     }
 
     Logger.log(
-        `AlleBuchungen Zahlungsupdate: applied=${applied}, skippedWindow=${skippedWindow}, skippedNoData=${skippedNoData}, skippedAlreadyRequested=${skippedAlreadyRequested}, skippedIneligible=${skippedIneligible}`
+        `AlleBuchungen Zahlungsupdate: applied=${applied}, failed=${failed}, skippedWindow=${skippedWindow}, skippedNoData=${skippedNoData}, skippedAlreadyRequested=${skippedAlreadyRequested}, skippedIneligible=${skippedIneligible}, notificationSent=${notificationSent}`
     );
-    return { applied, skippedNoData, skippedWindow, skippedAlreadyRequested, skippedIneligible };
+    return { applied, failed, skippedNoData, skippedWindow, skippedAlreadyRequested, skippedIneligible, notificationSent };
 }
 
 /**
