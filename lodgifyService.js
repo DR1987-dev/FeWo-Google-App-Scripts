@@ -1364,16 +1364,16 @@ function normalizeGuestNameValue_(value) {
 
     if (typeof value === "object") {
         const directName = firstDefined(value, ["name", "fullName", "full_name", "displayName", "display_name"]);
-        if (directName !== null && directName !== undefined && directName !== "") {
-            return String(directName).trim();
+        if (typeof directName === "string" && directName !== "") {
+            return directName.trim();
         }
 
         const nestedName = firstDefinedDeep(value, [
             "guest_name.full_name", "guest_name.fullName", "guest_name.name",
             "profile.full_name", "profile.fullName", "profile.name"
         ]);
-        if (nestedName !== null && nestedName !== undefined && nestedName !== "") {
-            return String(nestedName).trim();
+        if (typeof nestedName === "string" && nestedName !== "") {
+            return nestedName.trim();
         }
 
         const firstName = firstDefined(value, ["firstName", "first_name"]);
