@@ -137,48 +137,79 @@ function syncLexwareKundenSheet() {
         sheet.getRange(1, 1, 1, LEXWARE_KUNDEN_HEADERS.length).setFontWeight("bold");
     }
 
-    // Alle Kontakte (Kunden + Lieferanten + sonstige) seitenweise abrufen
-    var contacts = [];
-    var page = 0;
+    // Alle Kontakte (Kunden + Lieferanten + sonstige) seitenweise abrufen.
+    // Einmalkunden (Kunden ohne Kundennummer) erscheinen nur bei customer=true,
+    // daher wird der Abruf in zwei Durchläufen ausgeführt und per UUID zusammengeführt.
+    var contactsById = {};
     var pageSize = 100;
-    var totalPages = 1;
 
-    do {
-        var result;
-        try {
-            result = lexwareRequest("/contacts", { page: page, size: pageSize });
-        } catch (e) {
-            Logger.log(
-                "Kunden: Kontakt-Abruf fehlgeschlagen (Seite " + page + "): " + e.message
-            );
-            break;
-        }
+    var fetchPasses = [
+        { label: "alle Kontakte",  params: {} },
+        { label: "Einmalkunden",   params: { customer: true } }
+    ];
 
-        var body = result.body;
-        var pageContacts = [];
+    for (var p = 0; p < fetchPasses.length; p++) {
+        var pass = fetchPasses[p];
+        var page = 0;
+        var totalPages = 1;
 
-        if (Array.isArray(body)) {
-            pageContacts = body;
-        } else if (body && Array.isArray(body.content)) {
-            pageContacts = body.content;
-        } else if (body && Array.isArray(body.contacts)) {
-            pageContacts = body.contacts;
-        } else if (body && body.id) {
-            pageContacts = [body];
-        }
+        do {
+            var result;
+            try {
+                var queryParams = { page: page, size: pageSize };
+                var passKeys = Object.keys(pass.params);
+                for (var k = 0; k < passKeys.length; k++) {
+                    queryParams[passKeys[k]] = pass.params[passKeys[k]];
+                }
+                result = lexwareRequest("/contacts", queryParams);
+            } catch (e) {
+                Logger.log(
+                    "Kunden: Kontakt-Abruf fehlgeschlagen (" + pass.label +
+                    ", Seite " + page + "): " + e.message
+                );
+                break;
+            }
 
-        contacts = contacts.concat(pageContacts);
-        totalPages = (body && body.page && body.page.totalPages !== undefined)
-            ? body.page.totalPages
-            : (body && body.totalPages !== undefined
-                ? body.totalPages
-                : (pageContacts.length === pageSize ? page + 2 : page + 1));
-        page++;
-    } while (page < totalPages);
+            var body = result.body;
+            var pageContacts = [];
+
+            if (Array.isArray(body)) {
+                pageContacts = body;
+            } else if (body && Array.isArray(body.content)) {
+                pageContacts = body.content;
+            } else if (body && Array.isArray(body.contacts)) {
+                pageContacts = body.contacts;
+            } else if (body && body.id) {
+                pageContacts = [body];
+            }
+
+            for (var ci = 0; ci < pageContacts.length; ci++) {
+                var c = pageContacts[ci];
+                var cid = String(c.id || "").trim();
+                if (cid && !Object.prototype.hasOwnProperty.call(contactsById, cid)) {
+                    contactsById[cid] = c;
+                }
+            }
+
+            totalPages = (body && body.page && body.page.totalPages !== undefined)
+                ? body.page.totalPages
+                : (body && body.totalPages !== undefined
+                    ? body.totalPages
+                    : (pageContacts.length === pageSize ? page + 2 : page + 1));
+            page++;
+        } while (page < totalPages);
+
+        Logger.log(
+            "Kunden: Durchlauf '" + pass.label + "' abgeschlossen (" +
+            totalPages + " Seite(n))."
+        );
+    }
+
+    var contacts = Object.keys(contactsById).map(function (id) { return contactsById[id]; });
 
     Logger.log(
-        "Kunden: " + contacts.length + " Kontakt(e) aus " +
-        totalPages + " Seite(n) abgerufen."
+        "Kunden: " + contacts.length + " eindeutige Kontakt(e) nach " +
+        fetchPasses.length + " Durchläufen abgerufen."
     );
 
     // Vorhandene Zeilen nach UUID indizieren (Upsert-Logik)
