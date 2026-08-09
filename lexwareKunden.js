@@ -144,8 +144,8 @@ function syncLexwareKundenSheet() {
     var pageSize = 100;
 
     var fetchPasses = [
-        { label: "alle Kontakte",  params: {} },
-        { label: "Einmalkunden",   params: { customer: true } }
+        { label: "alle Kontakte", customer: undefined },
+        { label: "Einmalkunden",  customer: true }
     ];
 
     for (var p = 0; p < fetchPasses.length; p++) {
@@ -157,10 +157,7 @@ function syncLexwareKundenSheet() {
             var result;
             try {
                 var queryParams = { page: page, size: pageSize };
-                var passKeys = Object.keys(pass.params);
-                for (var k = 0; k < passKeys.length; k++) {
-                    queryParams[passKeys[k]] = pass.params[passKeys[k]];
-                }
+                if (pass.customer !== undefined) queryParams.customer = pass.customer;
                 result = lexwareRequest("/contacts", queryParams);
             } catch (e) {
                 Logger.log(
@@ -186,9 +183,7 @@ function syncLexwareKundenSheet() {
             for (var ci = 0; ci < pageContacts.length; ci++) {
                 var c = pageContacts[ci];
                 var cid = String(c.id || "").trim();
-                if (cid && !Object.prototype.hasOwnProperty.call(contactsById, cid)) {
-                    contactsById[cid] = c;
-                }
+                if (cid) contactsById[cid] = c;
             }
 
             totalPages = (body && body.page && body.page.totalPages !== undefined)
