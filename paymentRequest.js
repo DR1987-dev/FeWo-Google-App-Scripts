@@ -76,6 +76,7 @@ var DECLINED_OR_CANCELLED_STATUS_PATTERNS_ = [
     /\babgelehnt\b/,
     /\babgesagt\b/
 ];
+var PAYMENT_REQUEST_FAILURE_NOTIFICATION_DETAIL_LIMIT_ = 25;
 
 /**
  * Wandelt einen Wert in einen Boolean um.
@@ -134,19 +135,29 @@ function sendPaymentRequestErrorNotification_(summary) {
     const recipients = getPaymentRequestErrorNotificationRecipients_();
     if (!recipients.length) {
         Logger.log("⚠️ Keine Empfänger für PAYMENT_REQUEST_ERROR_NOTIFY_EMAILS konfiguriert.");
-        return false;
+        return { ok: false, reason: "missingRecipients" };
     }
+
+    const normalizedSummary = summary || {};
+    const sheetName = normalizedSummary.sheetName === undefined || normalizedSummary.sheetName === null
+        ? ""
+        : String(normalizedSummary.sheetName);
+    const applied = Number(normalizedSummary.applied === undefined || normalizedSummary.applied === null ? 0 : normalizedSummary.applied);
+    const failed = Number(normalizedSummary.failed === undefined || normalizedSummary.failed === null ? 0 : normalizedSummary.failed);
+    const details = normalizedSummary.details === undefined || normalizedSummary.details === null
+        ? "Keine Details vorhanden."
+        : String(normalizedSummary.details);
 
     const lines = [
         "Automatisches Lodgify Zahlungsupdate: Fehler aufgetreten.",
         "",
         "Zeitpunkt: " + new Date().toISOString(),
-        "Sheet: " + String(summary && summary.sheetName || ""),
-        "Angewendet: " + Number(summary && summary.applied || 0),
-        "Fehlgeschlagen: " + Number(summary && summary.failed || 0),
+        "Sheet: " + sheetName,
+        "Angewendet: " + applied,
+        "Fehlgeschlagen: " + failed,
         "",
         "Fehlerdetails:",
-        String(summary && summary.details || "Keine Details vorhanden.")
+        details
     ];
 
     try {
@@ -155,13 +166,13 @@ function sendPaymentRequestErrorNotification_(summary) {
             subject: "⚠️ Lodgify Zahlungsupdate fehlgeschlagen",
             body: lines.join("\n")
         });
-        return true;
+        return { ok: true, reason: "sent" };
     } catch (mailErr) {
         Logger.log(
             "⚠️ Versand der Fehlerbenachrichtigung fehlgeschlagen: " +
             String(mailErr && mailErr.message ? mailErr.message : mailErr)
         );
-        return false;
+        return { ok: false, reason: "sendFailed" };
     }
 }
 
@@ -1505,6 +1516,7 @@ function applyPaymentRequestUpdates_(sheetName, itemsById, config) {
     let skippedAlreadyRequested = 0;
     let skippedIneligible = 0;
     const failureMessages = [];
+    let failureDetailsTruncated = false;
 
     for (let i = 1; i < allData.length; i++) {
         const row = allData[i];
@@ -1576,26 +1588,52 @@ function applyPaymentRequestUpdates_(sheetName, itemsById, config) {
             const message = String(err && err.message ? err.message : err);
             const warning = `⚠️ AlleBuchungen Zahlungsupdate fehlgeschlagen für Buchung ${bookingId} (Zeile ${sheetRow}): ${message}`;
             Logger.log(warning);
-            if (failureMessages.length < 25) {
+            if (failureMessages.length < PAYMENT_REQUEST_FAILURE_NOTIFICATION_DETAIL_LIMIT_) {
                 failureMessages.push(`- Buchung ${bookingId} (Zeile ${sheetRow}): ${message}`);
+            } else if (!failureDetailsTruncated) {
+                failureDetailsTruncated = true;
             }
         }
     }
 
-    let notificationSent = false;
+    let notificationStatus = { ok: false, reason: "notRequired" };
     if (failed > 0) {
-        notificationSent = sendPaymentRequestErrorNotification_({
+        notificationStatus = sendPaymentRequestErrorNotification_({
             sheetName: sheetName,
             applied: applied,
             failed: failed,
-            details: failureMessages.join("\n")
+            details: failureMessages.concat(
+                failureDetailsTruncated ? ["- ... (weitere Fehler wurden nicht aufgeführt)"] : []
+            ).join("\n")
         });
+        if (!notificationStatus.ok) {
+            if (notificationStatus.reason === "missingRecipients") {
+                Logger.log(
+                    "⚠️ Fehlerbenachrichtigung für Zahlungsupdates konnte nicht versendet werden. " +
+                    "Bitte PAYMENT_REQUEST_ERROR_NOTIFY_EMAILS prüfen."
+                );
+            } else {
+                Logger.log(
+                    "⚠️ Fehlerbenachrichtigung für Zahlungsupdates konnte nicht versendet werden. " +
+                    "Grund: " + String(notificationStatus.reason || "unbekannt")
+                );
+            }
+        }
     }
 
     Logger.log(
-        `AlleBuchungen Zahlungsupdate: applied=${applied}, failed=${failed}, skippedWindow=${skippedWindow}, skippedNoData=${skippedNoData}, skippedAlreadyRequested=${skippedAlreadyRequested}, skippedIneligible=${skippedIneligible}, notificationSent=${notificationSent}`
+        `AlleBuchungen Zahlungsupdate: applied=${applied}, failed=${failed}, skippedWindow=${skippedWindow}, skippedNoData=${skippedNoData}, skippedAlreadyRequested=${skippedAlreadyRequested}, skippedIneligible=${skippedIneligible}, notificationSent=${notificationStatus.ok}, notificationReason=${notificationStatus.reason}`
     );
-    return { applied, failed, skippedNoData, skippedWindow, skippedAlreadyRequested, skippedIneligible, notificationSent };
+    return {
+        applied,
+        failed,
+        skippedNoData,
+        skippedWindow,
+        skippedAlreadyRequested,
+        skippedIneligible,
+        notificationSent: notificationStatus.ok,
+        notificationReason: notificationStatus.reason
+    };
 }
 
 /**
