@@ -76,6 +76,12 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
+          EFFECTIVE_WIREGUARD_ALLOWED_IPS="${WIREGUARD_ALLOWED_IPS}"
+          if printf '%s' "${WIREGUARD_ALLOWED_IPS}" | grep -Eq '(^|[[:space:]]*,[[:space:]]*)0\.0\.0\.0/0([[:space:]]*,[[:space:]]*|$)'; then
+            EFFECTIVE_WIREGUARD_ALLOWED_IPS="${CCU_IP}/32"
+            echo "::warning::WIREGUARD_ALLOWED_IPS enthaelt 0.0.0.0/0. Fuer den CI-Handshake wird stattdessen ${EFFECTIVE_WIREGUARD_ALLOWED_IPS} verwendet."
+          fi
+          echo "EFFECTIVE_WIREGUARD_ALLOWED_IPS=${EFFECTIVE_WIREGUARD_ALLOWED_IPS}" >> "$GITHUB_ENV"
           {
             echo "[Interface]"
             echo "PrivateKey = ${WG_PRIVATE_KEY}"
@@ -94,7 +100,7 @@ jobs:
             fi
             # AllowedIPs=192.168.2.0/24: Nur Heimnetz ueber WireGuard routen.
             # Kein Default-Route-Hijack, Handshake-UDP zum Speedport bleibt im normalen Routing.
-            echo "AllowedIPs = ${WIREGUARD_ALLOWED_IPS}"
+            echo "AllowedIPs = ${EFFECTIVE_WIREGUARD_ALLOWED_IPS}"
             echo "Endpoint = ${WG_ENDPOINT}"
             echo "PersistentKeepalive = ${WIREGUARD_KEEPALIVE}"
           } > "${WG_CONFIG_PATH}"
