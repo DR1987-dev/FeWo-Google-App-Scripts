@@ -1,0 +1,206 @@
+name: Test CCU3 via WireGuard VPN
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-ccu3-vpn:
+    runs-on: ubuntu-latest
+    permissions: {}
+    env:
+      WG_INTERFACE: wg-ci
+      WG_CONFIG_PATH: /tmp/wg-ci.conf
+      CCU_IP: ${{ vars.CCU_IP }}
+      WIREGUARD_ALLOWED_IPS: ${{ vars.WIREGUARD_ALLOWED_IPS }}
+      WIREGUARD_KEEPALIVE: ${{ vars.WIREGUARD_KEEPALIVE || '25' }}
+
+    steps:
+      - name: Install WireGuard and tools
+        run: |
+          if ! command -v wg >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y wireguard iproute2 iputils-ping curl netcat-openbsd
+          fi
+
+      - name: Validate required input
+        env:
+          WG_PRIVATE_KEY: ${{ secrets.WIREGUARD_PRIVATE_KEY }}
+          WG_PUBLIC_KEY: ${{ secrets.WIREGUARD_PUBLIC_KEY }}
+          WG_ADDRESS: ${{ secrets.WIREGUARD_ADDRESS }}
+          WG_ENDPOINT: ${{ secrets.WIREGUARD_ENDPOINT }}
+        run: |
+          set -euo pipefail
+          : "${CCU_IP:?GitHub Variable CCU_IP fehlt}"
+          : "${WIREGUARD_ALLOWED_IPS:?GitHub Variable WIREGUARD_ALLOWED_IPS fehlt}"
+          : "${WG_PRIVATE_KEY:?GitHub Secret WIREGUARD_PRIVATE_KEY fehlt}"
+          : "${WG_PUBLIC_KEY:?GitHub Secret WIREGUARD_PUBLIC_KEY fehlt}"
+          : "${WG_ADDRESS:?GitHub Secret WIREGUARD_ADDRESS fehlt}"
+          : "${WG_ENDPOINT:?GitHub Secret WIREGUARD_ENDPOINT fehlt}"
+
+      - name: Create temporary WireGuard config
+        env:
+          WG_PRIVATE_KEY: ${{ secrets.WIREGUARD_PRIVATE_KEY }}
+          WG_PUBLIC_KEY: ${{ secrets.WIREGUARD_PUBLIC_KEY }}
+          WG_ADDRESS: ${{ secrets.WIREGUARD_ADDRESS }}
+          WG_ENDPOINT: ${{ secrets.WIREGUARD_ENDPOINT }}
+          WG_PRESHARED_KEY: ${{ secrets.WIREGUARD_PRESHARED_KEY }}
+          WG_DNS: ${{ vars.WIREGUARD_DNS }}
+        run: |
+          set -euo pipefail
+          umask 077
+          {
+            echo "[Interface]"
+            echo "PrivateKey = ${WG_PRIVATE_KEY}"
+            echo "Address = ${WG_ADDRESS}"
+            if [ -n "${WG_DNS}" ]; then
+              echo "DNS = ${WG_DNS}"
+            fi
+            echo
+            echo "[Peer]"
+            echo "PublicKey = ${WG_PUBLIC_KEY}"
+            if [ -n "${WG_PRESHARED_KEY}" ]; then
+              echo "PresharedKey = ${WG_PRESHARED_KEY}"
+            fi
+            echo "AllowedIPs = ${WIREGUARD_ALLOWED_IPS}"
+            echo "Endpoint = ${WG_ENDPOINT}"
+            echo "PersistentKeepalive = ${WIREGUARD_KEEPALIVE}"
+          } > "${WG_CONFIG_PATH}"
+
+      - name: Start WireGuard tunnel
+        run: |
+          set -euo pipefail
+          if sudo wg-quick up "${WG_CONFIG_PATH}"; then
+            echo "WG_STATUS=OK" >> "$GITHUB_ENV"
+          else
+            echo "WG_STATUS=FEHLER" >> "$GITHUB_ENV"
+            exit 1
+          fi
+
+      - name: VPN diagnostics (non-sensitive)
+        if: ${{ always() }}
+        run: |
+          set +e
+          echo "=== Interface check ==="
+          ip link show "${WG_INTERFACE}" >/dev/null 2>&1 && echo "WireGuard Interface vorhanden: JA" || echo "WireGuard Interface vorhanden: NEIN"
+          echo
+          echo "=== wg show (ohne private Keys) ==="
+          sudo wg show "${WG_INTERFACE}" 2>/dev/null || echo "wg show nicht möglich (Tunnel evtl. nicht aktiv)"
+          echo
+          echo "=== Routing table ==="
+          ip route
+          echo
+          echo "=== Route to CCU ==="
+          ip route get "${CCU_IP}" || true
+
+      - name: Verify tunnel and test CCU3 reachability
+        if: ${{ env.WG_STATUS == 'OK' }}
+        run: |
+          set -euo pipefail
+
+          echo "ROUTE_STATUS=FEHLER" >> "$GITHUB_ENV"
+          echo "TCP_STATUS=FEHLER" >> "$GITHUB_ENV"
+          echo "HTTP_STATUS=FEHLER" >> "$GITHUB_ENV"
+          echo "VPN_STATUS=FEHLER" >> "$GITHUB_ENV"
+
+          if ip link show "${WG_INTERFACE}" >/dev/null 2>&1; then
+            echo "WireGuard-Tunnel aktiv: JA"
+            echo "VPN_STATUS=OK" >> "$GITHUB_ENV"
+          else
+            echo "WireGuard-Tunnel aktiv: NEIN"
+            exit 1
+          fi
+
+          if ip route get "${CCU_IP}" >/dev/null 2>&1; then
+            echo "ROUTE_STATUS=OK" >> "$GITHUB_ENV"
+          fi
+
+          echo "ICMP-Test (informativ, kein harter Fehler):"
+          if ping -c 3 -W 5 "${CCU_IP}"; then
+            echo "Ping zur CCU3 erfolgreich."
+          else
+            echo "Ping fehlgeschlagen oder geblockt (nicht zwingend ein Fehler im VPN-Setup)."
+          fi
+
+          TCP_80="false"
+          TCP_443="false"
+          HTTP_OK="false"
+
+          if nc -z -w 5 "${CCU_IP}" 80; then
+            TCP_80="true"
+          fi
+
+          if nc -z -w 5 "${CCU_IP}" 443; then
+            TCP_443="true"
+          fi
+
+          if [ "${TCP_80}" = "true" ] || [ "${TCP_443}" = "true" ]; then
+            echo "TCP_STATUS=OK" >> "$GITHUB_ENV"
+          fi
+
+          if [ "${TCP_80}" = "true" ]; then
+            HTTP_CODE_80="$(curl -sS -o /dev/null -m 10 -w "%{http_code}" "http://${CCU_IP}/" || true)"
+            echo "HTTP-Statuscode (80): ${HTTP_CODE_80:-keine Antwort}"
+            if [ -n "${HTTP_CODE_80}" ] && [ "${HTTP_CODE_80}" != "000" ]; then
+              HTTP_OK="true"
+            fi
+          fi
+
+          if [ "${TCP_443}" = "true" ]; then
+            HTTP_CODE_443="$(curl -k -sS -o /dev/null -m 10 -w "%{http_code}" "https://${CCU_IP}/" || true)"
+            echo "HTTP-Statuscode (443): ${HTTP_CODE_443:-keine Antwort}"
+            if [ -n "${HTTP_CODE_443}" ] && [ "${HTTP_CODE_443}" != "000" ]; then
+              HTTP_OK="true"
+            fi
+          fi
+
+          if [ "${HTTP_OK}" = "true" ]; then
+            echo "HTTP_STATUS=OK" >> "$GITHUB_ENV"
+          fi
+
+          if [ "${TCP_80}" != "true" ] && [ "${TCP_443}" != "true" ]; then
+            echo "Kein TCP-Port 80/443 auf der CCU3 erreichbar."
+          fi
+
+      - name: Final result
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          WG="${WG_STATUS:-FEHLER}"
+          VPN="${VPN_STATUS:-FEHLER}"
+          ROUTE="${ROUTE_STATUS:-FEHLER}"
+          TCP="${TCP_STATUS:-FEHLER}"
+          HTTP="${HTTP_STATUS:-FEHLER}"
+
+          echo "WireGuard: ${WG}"
+          echo "Route zur CCU3: ${ROUTE}"
+          echo "TCP-Verbindung zur CCU3: ${TCP}"
+          echo "HTTP-Verbindung zur CCU3: ${HTTP}"
+
+          if [ "${WG}" != "OK" ] || [ "${VPN}" != "OK" ]; then
+            echo "VPN kann nicht aufgebaut werden."
+            echo "WireGuard: ${WG}"
+            echo "VPN-Verbindung: ${VPN}"
+            echo "Bitte Endpoint, Schlüssel und WireGuard-Konfiguration prüfen."
+            exit 1
+          fi
+
+          if [ "${ROUTE}" = "OK" ] && [ "${TCP}" = "OK" ] && [ "${HTTP}" = "OK" ]; then
+            echo "CCU3 ist über den WireGuard-Tunnel erreichbar."
+            exit 0
+          fi
+
+          echo "VPN funktioniert, CCU3 aber nicht erreichbar."
+          echo "WireGuard: OK"
+          echo "VPN-Verbindung: OK"
+          echo "CCU3: NICHT ERREICHBAR"
+          echo "Wahrscheinliche Ursache: Routing, AllowedIPs oder Heimnetzroute."
+          exit 1
+
+      - name: Cleanup WireGuard and temporary files
+        if: ${{ always() }}
+        run: |
+          set +e
+          if ip link show "${WG_INTERFACE}" >/dev/null 2>&1; then
+            sudo wg-quick down "${WG_CONFIG_PATH}" || true
+          fi
+          rm -f "${WG_CONFIG_PATH}"
