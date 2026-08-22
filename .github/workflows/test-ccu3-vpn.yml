@@ -115,7 +115,7 @@ jobs:
           fi
 
           echo "ICMP-Test (informativ, kein harter Fehler):"
-          if ping -c 3 "${CCU_IP}"; then
+          if ping -c 3 -W 5 "${CCU_IP}"; then
             echo "Ping zur CCU3 erfolgreich."
           else
             echo "Ping fehlgeschlagen oder geblockt (nicht zwingend ein Fehler im VPN-Setup)."
@@ -161,7 +161,8 @@ jobs:
 
           if [ "${WG}" != "OK" ] || [ "${VPN}" != "OK" ]; then
             echo "VPN kann nicht aufgebaut werden."
-            echo "WireGuard: FEHLER"
+            echo "WireGuard: ${WG}"
+            echo "VPN-Verbindung: ${VPN}"
             echo "Bitte Endpoint, Schlüssel und WireGuard-Konfiguration prüfen."
             exit 1
           fi
