@@ -187,7 +187,7 @@ jobs:
             echo "VPN_STATUS=OK" >> "$GITHUB_ENV"
           else
             echo "WireGuard-Tunnel aktiv: NEIN"
-            exit 0
+            exit 1
           fi
 
           if ip route get "${CCU_IP}" >/dev/null 2>&1; then
@@ -284,14 +284,21 @@ jobs:
           echo "  HTTP-Verbindung CCU3:   ${HTTP}"
           echo "============================================"
 
+          # WireGuard konnte nicht gestartet werden
+          if [ "${WG}" != "OK" ]; then
+            echo "Ergebnis: WireGuard konnte nicht gestartet werden."
+            echo "Bitte Endpoint, Schluessel und WireGuard-Konfiguration pruefen."
+            exit 1
+          fi
+
           # Fall A: Alles OK
-          if [ "${WG}" = "OK" ] && [ "${VPN}" = "OK" ] && [ "${HANDSHAKE}" = "OK" ] && [ "${ROUTE}" = "OK" ] && [ "${TCP}" = "OK" ] && [ "${HTTP}" = "OK" ]; then
+          if [ "${VPN}" = "OK" ] && [ "${HANDSHAKE}" = "OK" ] && [ "${ROUTE}" = "OK" ] && [ "${TCP}" = "OK" ] && [ "${HTTP}" = "OK" ]; then
             echo "Ergebnis: A - WireGuard funktioniert und CCU3 erreichbar. Alles OK."
             exit 0
           fi
 
           # Fall C: WireGuard-Handshake fehlt
-          if [ "${WG}" = "OK" ] && [ "${HANDSHAKE}" != "OK" ]; then
+          if [ "${HANDSHAKE}" != "OK" ]; then
             echo "Ergebnis: C - WireGuard-Handshake fehlgeschlagen."
             echo "Moegliche Ursachen:"
             echo "  - Speedport-Endpoint nicht erreichbar (Firewall, Portweiterleitung, DynDNS?)"
@@ -303,27 +310,20 @@ jobs:
           fi
 
           # Fall D: Routing fehlt
-          if [ "${WG}" = "OK" ] && [ "${HANDSHAKE}" = "OK" ] && [ "${ROUTE}" != "OK" ]; then
+          if [ "${ROUTE}" != "OK" ]; then
             echo "Ergebnis: D - Routing zur CCU3 fehlt."
             echo "Pruefen: AllowedIPs muss 192.168.2.0/24 oder 0.0.0.0/0 enthalten."
             exit 1
           fi
 
           # Fall B: WireGuard und Handshake OK, aber kein TCP zur CCU3
-          if [ "${WG}" = "OK" ] && [ "${HANDSHAKE}" = "OK" ] && [ "${ROUTE}" = "OK" ] && [ "${TCP}" != "OK" ]; then
+          if [ "${TCP}" != "OK" ]; then
             echo "Ergebnis: B - WireGuard Handshake OK, aber kein TCP-Zugriff auf CCU3."
             echo "Moegliche Ursachen:"
             echo "  - CCU3 (192.168.2.109) ist im Heimnetz nicht erreichbar (ausgeschaltet?)."
             echo "  - Speedport leitet den Heimnetz-Traffic nicht zurueck zum WireGuard-Client."
             echo "  - MTU-Problem: Grosse Pakete werden fragmentiert oder verworfen."
             echo "  - Firewall auf CCU3 blockiert eingehende Verbindungen."
-            exit 1
-          fi
-
-          # Sonstiger Fehler
-          if [ "${WG}" != "OK" ]; then
-            echo "Ergebnis: WireGuard konnte nicht gestartet werden."
-            echo "Bitte Endpoint, Schluessel und WireGuard-Konfiguration pruefen."
             exit 1
           fi
 
