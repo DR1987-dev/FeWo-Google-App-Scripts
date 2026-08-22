@@ -26,23 +26,37 @@ jobs:
         env:
           WG_PRIVATE_KEY: ${{ secrets.WIREGUARD_PRIVATE_KEY }}
           WG_PUBLIC_KEY: ${{ secrets.WIREGUARD_PUBLIC_KEY }}
-          WG_ADDRESS: ${{ secrets.WIREGUARD_ADDRESS }}
-          WG_ENDPOINT: ${{ secrets.WIREGUARD_ENDPOINT }}
+          WG_ADDRESS: ${{ vars.WIREGUARD_ADDRESS }}
+          WG_ENDPOINT: ${{ vars.WIREGUARD_ENDPOINT }}
         run: |
           set -euo pipefail
-          : "${CCU_IP:?GitHub Variable CCU_IP fehlt}"
-          : "${WIREGUARD_ALLOWED_IPS:?GitHub Variable WIREGUARD_ALLOWED_IPS fehlt}"
-          : "${WG_PRIVATE_KEY:?GitHub Secret WIREGUARD_PRIVATE_KEY fehlt}"
-          : "${WG_PUBLIC_KEY:?GitHub Secret WIREGUARD_PUBLIC_KEY fehlt}"
-          : "${WG_ADDRESS:?GitHub Secret WIREGUARD_ADDRESS fehlt}"
-          : "${WG_ENDPOINT:?GitHub Secret WIREGUARD_ENDPOINT fehlt}"
+          ERRORS=0
+          check_var() {
+            local name="$1" value="$2" kind="$3"
+            if [ -z "${value}" ]; then
+              echo "::error::${kind} '${name}' ist nicht gesetzt oder leer."
+              ERRORS=$((ERRORS + 1))
+            else
+              echo "${kind} '${name}': OK"
+            fi
+          }
+          check_var "CCU_IP"                  "${CCU_IP}"                  "GitHub Variable"
+          check_var "WIREGUARD_ALLOWED_IPS"   "${WIREGUARD_ALLOWED_IPS}"   "GitHub Variable"
+          check_var "WIREGUARD_ADDRESS"       "${WG_ADDRESS}"              "GitHub Variable"
+          check_var "WIREGUARD_ENDPOINT"      "${WG_ENDPOINT}"             "GitHub Variable"
+          check_var "WIREGUARD_PRIVATE_KEY"   "${WG_PRIVATE_KEY}"          "GitHub Secret"
+          check_var "WIREGUARD_PUBLIC_KEY"    "${WG_PUBLIC_KEY}"           "GitHub Secret"
+          if [ "${ERRORS}" -gt 0 ]; then
+            echo "::error::${ERRORS} erforderliche(r) Wert(e) fehlen. Bitte die Repository Secrets und Variables prüfen."
+            exit 1
+          fi
 
       - name: Create temporary WireGuard config
         env:
           WG_PRIVATE_KEY: ${{ secrets.WIREGUARD_PRIVATE_KEY }}
           WG_PUBLIC_KEY: ${{ secrets.WIREGUARD_PUBLIC_KEY }}
-          WG_ADDRESS: ${{ secrets.WIREGUARD_ADDRESS }}
-          WG_ENDPOINT: ${{ secrets.WIREGUARD_ENDPOINT }}
+          WG_ADDRESS: ${{ vars.WIREGUARD_ADDRESS }}
+          WG_ENDPOINT: ${{ vars.WIREGUARD_ENDPOINT }}
           WG_PRESHARED_KEY: ${{ secrets.WIREGUARD_PRESHARED_KEY }}
           WG_DNS: ${{ vars.WIREGUARD_DNS }}
         run: |
