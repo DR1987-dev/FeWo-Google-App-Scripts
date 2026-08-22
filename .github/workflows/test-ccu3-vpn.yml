@@ -24,14 +24,20 @@ jobs:
       - name: Validate required input
         run: |
           set -euo pipefail
+          WG_PRIVATE_KEY="${{ secrets.WIREGUARD_PRIVATE_KEY }}"
+          WG_PUBLIC_KEY="${{ secrets.WIREGUARD_PUBLIC_KEY }}"
+          WG_ADDRESS="${{ secrets.WIREGUARD_ADDRESS }}"
+          WG_ENDPOINT="${{ secrets.WIREGUARD_ENDPOINT }}"
           : "${CCU_IP:?GitHub Variable CCU_IP fehlt}"
           : "${WIREGUARD_ALLOWED_IPS:?GitHub Variable WIREGUARD_ALLOWED_IPS fehlt}"
-          : "${{ secrets.WIREGUARD_PRIVATE_KEY }}"
-          : "${{ secrets.WIREGUARD_PUBLIC_KEY }}"
-          : "${{ secrets.WIREGUARD_ADDRESS }}"
-          : "${{ secrets.WIREGUARD_ENDPOINT }}"
+          : "${WG_PRIVATE_KEY:?GitHub Secret WIREGUARD_PRIVATE_KEY fehlt}"
+          : "${WG_PUBLIC_KEY:?GitHub Secret WIREGUARD_PUBLIC_KEY fehlt}"
+          : "${WG_ADDRESS:?GitHub Secret WIREGUARD_ADDRESS fehlt}"
+          : "${WG_ENDPOINT:?GitHub Secret WIREGUARD_ENDPOINT fehlt}"
 
       - name: Create temporary WireGuard config
+        env:
+          WG_PRESHARED_KEY: ${{ secrets.WIREGUARD_PRESHARED_KEY }}
         run: |
           set -euo pipefail
           umask 077
@@ -45,8 +51,8 @@ jobs:
             echo
             echo "[Peer]"
             echo "PublicKey = ${{ secrets.WIREGUARD_PUBLIC_KEY }}"
-            if [ -n "${{ secrets.WIREGUARD_PRESHARED_KEY || '' }}" ]; then
-              echo "PresharedKey = ${{ secrets.WIREGUARD_PRESHARED_KEY }}"
+            if [ -n "${WG_PRESHARED_KEY}" ]; then
+              echo "PresharedKey = ${WG_PRESHARED_KEY}"
             fi
             echo "AllowedIPs = ${WIREGUARD_ALLOWED_IPS}"
             echo "Endpoint = ${{ secrets.WIREGUARD_ENDPOINT }}"
@@ -60,6 +66,7 @@ jobs:
             echo "WG_STATUS=OK" >> "$GITHUB_ENV"
           else
             echo "WG_STATUS=FEHLER" >> "$GITHUB_ENV"
+            exit 1
           fi
 
       - name: VPN diagnostics (non-sensitive)
@@ -86,13 +93,13 @@ jobs:
           echo "ROUTE_STATUS=FEHLER" >> "$GITHUB_ENV"
           echo "TCP_STATUS=FEHLER" >> "$GITHUB_ENV"
           echo "HTTP_STATUS=FEHLER" >> "$GITHUB_ENV"
-          echo "VPN_STATUS=OK" >> "$GITHUB_ENV"
+          echo "VPN_STATUS=FEHLER" >> "$GITHUB_ENV"
 
           if ip link show "${WG_INTERFACE}" >/dev/null 2>&1; then
             echo "WireGuard-Tunnel aktiv: JA"
+            echo "VPN_STATUS=OK" >> "$GITHUB_ENV"
           else
             echo "WireGuard-Tunnel aktiv: NEIN"
-            echo "VPN_STATUS=FEHLER" >> "$GITHUB_ENV"
             exit 0
           fi
 
