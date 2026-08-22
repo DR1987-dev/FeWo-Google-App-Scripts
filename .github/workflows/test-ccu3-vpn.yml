@@ -107,7 +107,7 @@ jobs:
             echo "VPN_STATUS=OK" >> "$GITHUB_ENV"
           else
             echo "WireGuard-Tunnel aktiv: NEIN"
-            exit 0
+            exit 1
           fi
 
           if ip route get "${CCU_IP}" >/dev/null 2>&1; then
