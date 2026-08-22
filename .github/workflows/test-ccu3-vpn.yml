@@ -3,6 +3,17 @@ name: Test CCU3 via WireGuard VPN
 on:
   workflow_dispatch:
 
+# Hinweis zur AllowedIPs-Wahl:
+# Der Speedport Smart 3 leitet den WireGuard-Traffic ins Heimnetz 192.168.2.0/24.
+# AllowedIPs=192.168.2.0/24 routet ausschliesslich das Heimnetz ueber WireGuard.
+# Das vermeidet das Policy-Routing-Problem, das bei AllowedIPs=0.0.0.0/0 auftritt:
+# wg-quick legt bei 0.0.0.0/0 eine separate Routing-Tabelle an und fuegt
+# fwmark-basierte ip-rules hinzu. Das kann dazu fuehren, dass der GitHub Runner
+# keinen Handshake bekommt, weil der Endpoint-Traffic (UDP) ueber sich selbst
+# geroutet wird, bevor die VPN-Verbindung steht.
+# Mit 192.168.2.0/24 bleibt das Default-Gateway erhalten, der Handshake
+# gelingt problemlos und danach ist 192.168.2.109 erreichbar.
+
 jobs:
   test-ccu3-vpn:
     runs-on: ubuntu-latest
@@ -11,7 +22,10 @@ jobs:
       WG_INTERFACE: wg-ci
       WG_CONFIG_PATH: /tmp/wg-ci.conf
       CCU_IP: ${{ vars.CCU_IP }}
-      WIREGUARD_ALLOWED_IPS: ${{ vars.WIREGUARD_ALLOWED_IPS }}
+      # AllowedIPs: Nur Heimnetz routen, kein Default-Route-Hijack.
+      # Wert kann ueber GitHub Variable WIREGUARD_ALLOWED_IPS ueberschrieben werden.
+      # Standard: 192.168.2.0/24
+      WIREGUARD_ALLOWED_IPS: ${{ vars.WIREGUARD_ALLOWED_IPS || '192.168.2.0/24' }}
       WIREGUARD_KEEPALIVE: ${{ vars.WIREGUARD_KEEPALIVE || '25' }}
 
     steps:
@@ -47,7 +61,7 @@ jobs:
           check_var "WIREGUARD_PRIVATE_KEY"   "${WG_PRIVATE_KEY}"          "GitHub Secret"
           check_var "WIREGUARD_PUBLIC_KEY"    "${WG_PUBLIC_KEY}"           "GitHub Secret"
           if [ "${ERRORS}" -gt 0 ]; then
-            echo "::error::${ERRORS} erforderliche(r) Wert(e) fehlen. Bitte die Repository Secrets und Variables prüfen."
+            echo "::error::${ERRORS} erforderliche(r) Wert(e) fehlen. Bitte die Repository Secrets und Variables pruefen."
             exit 1
           fi
 
@@ -66,6 +80,9 @@ jobs:
             echo "[Interface]"
             echo "PrivateKey = ${WG_PRIVATE_KEY}"
             echo "Address = ${WG_ADDRESS}"
+            # MTU 1420: Standardwert fuer WireGuard ueber UDP/IPv4.
+            # Verhindert IP-Fragmentierung bei encapsuliertem Traffic.
+            echo "MTU = 1420"
             if [ -n "${WG_DNS}" ]; then
               echo "DNS = ${WG_DNS}"
             fi
@@ -75,6 +92,8 @@ jobs:
             if [ -n "${WG_PRESHARED_KEY}" ]; then
               echo "PresharedKey = ${WG_PRESHARED_KEY}"
             fi
+            # AllowedIPs=192.168.2.0/24: Nur Heimnetz ueber WireGuard routen.
+            # Kein Default-Route-Hijack, Handshake-UDP zum Speedport bleibt im normalen Routing.
             echo "AllowedIPs = ${WIREGUARD_ALLOWED_IPS}"
             echo "Endpoint = ${WG_ENDPOINT}"
             echo "PersistentKeepalive = ${WIREGUARD_KEEPALIVE}"
@@ -90,26 +109,73 @@ jobs:
             exit 1
           fi
 
+      - name: Wait for WireGuard handshake
+        if: ${{ env.WG_STATUS == 'OK' }}
+        run: |
+          set +e
+          echo "Warte auf WireGuard-Handshake (max. 30 Sekunden)..."
+          HANDSHAKE_OK="false"
+          for i in $(seq 1 6); do
+            sleep 5
+            # latest-handshakes gibt den Unix-Timestamp des letzten Handshakes aus (0 = kein Handshake)
+            HANDSHAKE_TS=$(sudo wg show "${WG_INTERFACE}" latest-handshakes 2>/dev/null | awk '{print $2}')
+            if [ -n "${HANDSHAKE_TS}" ] && [ "${HANDSHAKE_TS}" != "0" ]; then
+              echo "Handshake erfolgreich nach $((i * 5)) Sekunden."
+              HANDSHAKE_OK="true"
+              break
+            fi
+            echo "Versuch ${i}/6: noch kein Handshake..."
+          done
+          if [ "${HANDSHAKE_OK}" = "true" ]; then
+            echo "HANDSHAKE_STATUS=OK" >> "$GITHUB_ENV"
+          else
+            echo "HANDSHAKE_STATUS=FEHLER" >> "$GITHUB_ENV"
+            echo "::warning::Kein WireGuard-Handshake nach 30 Sekunden. Moegliche Ursachen:"
+            echo "::warning::  - Speedport-Endpoint nicht erreichbar (Firewall, Portweiterleitung?)"
+            echo "::warning::  - Derselbe Peer wird gleichzeitig vom iPhone verwendet (WireGuard unterstuetzt nur eine aktive Session pro Peer)"
+            echo "::warning::  - Falscher PublicKey oder PrivateKey"
+            echo "::warning::  - Falscher Endpoint (IP:Port)"
+          fi
+
       - name: VPN diagnostics (non-sensitive)
         if: ${{ always() }}
         run: |
           set +e
           echo "=== Interface check ==="
-          ip link show "${WG_INTERFACE}" >/dev/null 2>&1 && echo "WireGuard Interface vorhanden: JA" || echo "WireGuard Interface vorhanden: NEIN"
+          if ip link show "${WG_INTERFACE}" >/dev/null 2>&1; then
+            echo "WireGuard Interface vorhanden: JA"
+            ip link show "${WG_INTERFACE}"
+            echo
+            echo "=== MTU ==="
+            ip link show "${WG_INTERFACE}" | grep -o 'mtu [0-9]*' || true
+          else
+            echo "WireGuard Interface vorhanden: NEIN"
+          fi
           echo
           echo "=== wg show (ohne private Keys) ==="
-          sudo wg show "${WG_INTERFACE}" 2>/dev/null || echo "wg show nicht möglich (Tunnel evtl. nicht aktiv)"
+          sudo wg show "${WG_INTERFACE}" 2>/dev/null || echo "wg show nicht moeglich (Tunnel evtl. nicht aktiv)"
           echo
-          echo "=== Routing table ==="
+          echo "=== Handshake-Status ==="
+          HANDSHAKE_TS=$(sudo wg show "${WG_INTERFACE}" latest-handshakes 2>/dev/null | awk '{print $2}')
+          if [ -n "${HANDSHAKE_TS}" ] && [ "${HANDSHAKE_TS}" != "0" ]; then
+            echo "Letzter Handshake Unix-Timestamp: ${HANDSHAKE_TS}"
+          else
+            echo "Kein Handshake vorhanden (Timestamp: ${HANDSHAKE_TS:-n/a})"
+          fi
+          echo
+          echo "=== Transfer RX/TX ==="
+          sudo wg show "${WG_INTERFACE}" transfer 2>/dev/null || true
+          echo
+          echo "=== Routing table (main) ==="
           ip route
           echo
           echo "=== Route to CCU ==="
-          ip route get "${CCU_IP}" || true
+          ip route get "${CCU_IP}" 2>/dev/null || echo "Keine Route zur CCU3 gefunden"
 
       - name: Verify tunnel and test CCU3 reachability
         if: ${{ env.WG_STATUS == 'OK' }}
         run: |
-          set -euo pipefail
+          set +e
 
           echo "ROUTE_STATUS=FEHLER" >> "$GITHUB_ENV"
           echo "TCP_STATUS=FEHLER" >> "$GITHUB_ENV"
@@ -125,26 +191,40 @@ jobs:
           fi
 
           if ip route get "${CCU_IP}" >/dev/null 2>&1; then
+            echo "Route zur CCU3 vorhanden: JA"
             echo "ROUTE_STATUS=OK" >> "$GITHUB_ENV"
+          else
+            echo "Route zur CCU3 vorhanden: NEIN"
           fi
 
+          echo
           echo "ICMP-Test (informativ, kein harter Fehler):"
-          if ping -c 3 -W 5 "${CCU_IP}"; then
+          if ping -c 3 -W 5 "${CCU_IP}" 2>/dev/null; then
             echo "Ping zur CCU3 erfolgreich."
           else
             echo "Ping fehlgeschlagen oder geblockt (nicht zwingend ein Fehler im VPN-Setup)."
           fi
 
+          echo
+          echo "=== TCP-Test Port 80 ==="
           TCP_80="false"
           TCP_443="false"
           HTTP_OK="false"
 
-          if nc -z -w 5 "${CCU_IP}" 80; then
+          if nc -vz -w 10 "${CCU_IP}" 80 2>&1; then
+            echo "TCP Port 80: OFFEN"
             TCP_80="true"
+          else
+            echo "TCP Port 80: NICHT ERREICHBAR"
           fi
 
-          if nc -z -w 5 "${CCU_IP}" 443; then
+          echo
+          echo "=== TCP-Test Port 443 ==="
+          if nc -vz -w 10 "${CCU_IP}" 443 2>&1; then
+            echo "TCP Port 443: OFFEN"
             TCP_443="true"
+          else
+            echo "TCP Port 443: NICHT ERREICHBAR"
           fi
 
           if [ "${TCP_80}" = "true" ] || [ "${TCP_443}" = "true" ]; then
@@ -152,7 +232,9 @@ jobs:
           fi
 
           if [ "${TCP_80}" = "true" ]; then
-            HTTP_CODE_80="$(curl -sS -o /dev/null -m 10 -w "%{http_code}" "http://${CCU_IP}/" || true)"
+            echo
+            echo "=== HTTP-Test Port 80 ==="
+            HTTP_CODE_80="$(curl --connect-timeout 10 --max-time 15 -sS -o /dev/null -w "%{http_code}" "http://${CCU_IP}/" 2>/dev/null || true)"
             echo "HTTP-Statuscode (80): ${HTTP_CODE_80:-keine Antwort}"
             if [ -n "${HTTP_CODE_80}" ] && [ "${HTTP_CODE_80}" != "000" ]; then
               HTTP_OK="true"
@@ -160,7 +242,9 @@ jobs:
           fi
 
           if [ "${TCP_443}" = "true" ]; then
-            HTTP_CODE_443="$(curl -k -sS -o /dev/null -m 10 -w "%{http_code}" "https://${CCU_IP}/" || true)"
+            echo
+            echo "=== HTTP-Test Port 443 ==="
+            HTTP_CODE_443="$(curl -k --connect-timeout 10 --max-time 15 -sS -o /dev/null -w "%{http_code}" "https://${CCU_IP}/" 2>/dev/null || true)"
             echo "HTTP-Statuscode (443): ${HTTP_CODE_443:-keine Antwort}"
             if [ -n "${HTTP_CODE_443}" ] && [ "${HTTP_CODE_443}" != "000" ]; then
               HTTP_OK="true"
@@ -172,42 +256,78 @@ jobs:
           fi
 
           if [ "${TCP_80}" != "true" ] && [ "${TCP_443}" != "true" ]; then
-            echo "Kein TCP-Port 80/443 auf der CCU3 erreichbar."
+            echo
+            echo "::warning::Kein TCP-Port 80/443 auf der CCU3 erreichbar."
+            if [ "${HANDSHAKE_STATUS:-FEHLER}" != "OK" ]; then
+              echo "::warning::Handshake fehlt - WireGuard-Tunnel ist nicht aktiv (kein Datenaustausch mit Speedport)."
+            fi
           fi
 
       - name: Final result
         if: ${{ always() }}
         run: |
-          set -euo pipefail
+          set +e
           WG="${WG_STATUS:-FEHLER}"
           VPN="${VPN_STATUS:-FEHLER}"
           ROUTE="${ROUTE_STATUS:-FEHLER}"
           TCP="${TCP_STATUS:-FEHLER}"
           HTTP="${HTTP_STATUS:-FEHLER}"
+          HANDSHAKE="${HANDSHAKE_STATUS:-FEHLER}"
 
-          echo "WireGuard: ${WG}"
-          echo "Route zur CCU3: ${ROUTE}"
-          echo "TCP-Verbindung zur CCU3: ${TCP}"
-          echo "HTTP-Verbindung zur CCU3: ${HTTP}"
+          echo "============================================"
+          echo "Testergebnis:"
+          echo "  WireGuard Interface:    ${WG}"
+          echo "  VPN-Verbindung:         ${VPN}"
+          echo "  WireGuard Handshake:    ${HANDSHAKE}"
+          echo "  Route zur CCU3:         ${ROUTE}"
+          echo "  TCP-Verbindung CCU3:    ${TCP}"
+          echo "  HTTP-Verbindung CCU3:   ${HTTP}"
+          echo "============================================"
 
-          if [ "${WG}" != "OK" ] || [ "${VPN}" != "OK" ]; then
-            echo "VPN kann nicht aufgebaut werden."
-            echo "WireGuard: ${WG}"
-            echo "VPN-Verbindung: ${VPN}"
-            echo "Bitte Endpoint, Schlüssel und WireGuard-Konfiguration prüfen."
+          # WireGuard konnte nicht gestartet werden
+          if [ "${WG}" != "OK" ]; then
+            echo "Ergebnis: WireGuard konnte nicht gestartet werden."
+            echo "Bitte Endpoint, Schluessel und WireGuard-Konfiguration pruefen."
             exit 1
           fi
 
-          if [ "${ROUTE}" = "OK" ] && [ "${TCP}" = "OK" ] && [ "${HTTP}" = "OK" ]; then
-            echo "CCU3 ist über den WireGuard-Tunnel erreichbar."
+          # Fall A: Alles OK
+          if [ "${VPN}" = "OK" ] && [ "${HANDSHAKE}" = "OK" ] && [ "${ROUTE}" = "OK" ] && [ "${TCP}" = "OK" ] && [ "${HTTP}" = "OK" ]; then
+            echo "Ergebnis: A - WireGuard funktioniert und CCU3 erreichbar. Alles OK."
             exit 0
           fi
 
-          echo "VPN funktioniert, CCU3 aber nicht erreichbar."
-          echo "WireGuard: OK"
-          echo "VPN-Verbindung: OK"
-          echo "CCU3: NICHT ERREICHBAR"
-          echo "Wahrscheinliche Ursache: Routing, AllowedIPs oder Heimnetzroute."
+          # Fall C: WireGuard-Handshake fehlt
+          if [ "${HANDSHAKE}" != "OK" ]; then
+            echo "Ergebnis: C - WireGuard-Handshake fehlgeschlagen."
+            echo "Moegliche Ursachen:"
+            echo "  - Speedport-Endpoint nicht erreichbar (Firewall, Portweiterleitung, DynDNS?)"
+            echo "  - Derselbe WireGuard-Peer wird gleichzeitig vom iPhone verwendet."
+            echo "    WireGuard unterstuetzt nur eine aktive Session pro Peer."
+            echo "    Loesung: iPhone-Verbindung trennen oder einen zweiten Peer im Speedport anlegen."
+            echo "  - Falscher PublicKey, PrivateKey oder Endpoint in den GitHub Secrets/Variables."
+            exit 1
+          fi
+
+          # Fall D: Routing fehlt
+          if [ "${ROUTE}" != "OK" ]; then
+            echo "Ergebnis: D - Routing zur CCU3 fehlt."
+            echo "Pruefen: AllowedIPs muss 192.168.2.0/24 oder 0.0.0.0/0 enthalten."
+            exit 1
+          fi
+
+          # Fall B: WireGuard und Handshake OK, aber kein TCP zur CCU3
+          if [ "${TCP}" != "OK" ]; then
+            echo "Ergebnis: B - WireGuard Handshake OK, aber kein TCP-Zugriff auf CCU3."
+            echo "Moegliche Ursachen:"
+            echo "  - CCU3 (192.168.2.109) ist im Heimnetz nicht erreichbar (ausgeschaltet?)."
+            echo "  - Speedport leitet den Heimnetz-Traffic nicht zurueck zum WireGuard-Client."
+            echo "  - MTU-Problem: Grosse Pakete werden fragmentiert oder verworfen."
+            echo "  - Firewall auf CCU3 blockiert eingehende Verbindungen."
+            exit 1
+          fi
+
+          echo "Ergebnis: Unbekannter Fehler. Bitte Logs pruefen."
           exit 1
 
       - name: Cleanup WireGuard and temporary files
