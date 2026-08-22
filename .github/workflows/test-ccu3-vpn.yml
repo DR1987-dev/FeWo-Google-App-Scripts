@@ -39,7 +39,7 @@ jobs:
       - name: Validate required input
         env:
           WG_PRIVATE_KEY: ${{ secrets.WIREGUARD_PRIVATE_KEY }}
-          WG_PUBLIC_KEY: ${{ secrets.WIREGUARD_PUBLIC_KEY }}
+          WG_PEER_PUBLIC_KEY: ${{ vars.WIREGUARD_PEER_PUBLIC_KEY }}
           WG_ADDRESS: ${{ vars.WIREGUARD_ADDRESS }}
           WG_ENDPOINT: ${{ vars.WIREGUARD_ENDPOINT }}
         run: |
@@ -54,21 +54,44 @@ jobs:
               echo "${kind} '${name}': OK"
             fi
           }
-          check_var "CCU_IP"                  "${CCU_IP}"                  "GitHub Variable"
-          check_var "WIREGUARD_ALLOWED_IPS"   "${WIREGUARD_ALLOWED_IPS}"   "GitHub Variable"
-          check_var "WIREGUARD_ADDRESS"       "${WG_ADDRESS}"              "GitHub Variable"
-          check_var "WIREGUARD_ENDPOINT"      "${WG_ENDPOINT}"             "GitHub Variable"
-          check_var "WIREGUARD_PRIVATE_KEY"   "${WG_PRIVATE_KEY}"          "GitHub Secret"
-          check_var "WIREGUARD_PUBLIC_KEY"    "${WG_PUBLIC_KEY}"           "GitHub Secret"
+          check_var "CCU_IP"                    "${CCU_IP}"                  "GitHub Variable"
+          check_var "WIREGUARD_ALLOWED_IPS"     "${WIREGUARD_ALLOWED_IPS}"   "GitHub Variable"
+          check_var "WIREGUARD_ADDRESS"         "${WG_ADDRESS}"              "GitHub Variable"
+          check_var "WIREGUARD_ENDPOINT"        "${WG_ENDPOINT}"             "GitHub Variable"
+          check_var "WIREGUARD_PRIVATE_KEY"     "${WG_PRIVATE_KEY}"          "GitHub Secret"
+          check_var "WIREGUARD_PEER_PUBLIC_KEY" "${WG_PEER_PUBLIC_KEY}"      "GitHub Variable"
           if [ "${ERRORS}" -gt 0 ]; then
             echo "::error::${ERRORS} erforderliche(r) Wert(e) fehlen. Bitte die Repository Secrets und Variables pruefen."
+            exit 1
+          fi
+          # Validierung: Keys haben gueltiges WireGuard-Format (Base64, 44 Zeichen, endet auf =)
+          WG_KEY_REGEX='^[A-Za-z0-9+/]{43}=$'
+          if ! printf '%s' "${WG_PEER_PUBLIC_KEY}" | grep -Eq "${WG_KEY_REGEX}"; then
+            echo "::error::WIREGUARD_PEER_PUBLIC_KEY hat kein gueltiges WireGuard-Format (Base64, 44 Zeichen)."
+            ERRORS=$((ERRORS + 1))
+          fi
+          if ! printf '%s' "${WG_PRIVATE_KEY}" | wg pubkey >/dev/null 2>&1; then
+            echo "::error::WIREGUARD_PRIVATE_KEY ist kein gueltiger WireGuard-PrivateKey."
+            ERRORS=$((ERRORS + 1))
+          else
+            DERIVED_CLIENT_PUBLIC_KEY="$(printf '%s' "${WG_PRIVATE_KEY}" | wg pubkey 2>/dev/null)"
+            unset WG_PRIVATE_KEY
+            if [ "${DERIVED_CLIENT_PUBLIC_KEY}" = "${WG_PEER_PUBLIC_KEY}" ]; then
+              echo "::error::WIREGUARD_PEER_PUBLIC_KEY ist identisch zum abgeleiteten GitHub-Client-PublicKey. Peer und Client muessen unterschiedliche Keys verwenden."
+              ERRORS=$((ERRORS + 1))
+            else
+              echo "Client PublicKey und Peer PublicKey sind unterschiedlich: OK"
+            fi
+          fi
+          if [ "${ERRORS}" -gt 0 ]; then
+            echo "::error::${ERRORS} Validierungsfehler. Bitte die Repository Secrets und Variables pruefen."
             exit 1
           fi
 
       - name: Create temporary WireGuard config
         env:
           WG_PRIVATE_KEY: ${{ secrets.WIREGUARD_PRIVATE_KEY }}
-          WG_PUBLIC_KEY: ${{ secrets.WIREGUARD_PUBLIC_KEY }}
+          WG_PEER_PUBLIC_KEY: ${{ vars.WIREGUARD_PEER_PUBLIC_KEY }}
           WG_ADDRESS: ${{ vars.WIREGUARD_ADDRESS }}
           WG_ENDPOINT: ${{ vars.WIREGUARD_ENDPOINT }}
           WG_PRESHARED_KEY: ${{ secrets.WIREGUARD_PRESHARED_KEY }}
@@ -94,7 +117,7 @@ jobs:
             fi
             echo
             echo "[Peer]"
-            echo "PublicKey = ${WG_PUBLIC_KEY}"
+            echo "PublicKey = ${WG_PEER_PUBLIC_KEY}"
             if [ -n "${WG_PRESHARED_KEY}" ]; then
               echo "PresharedKey = ${WG_PRESHARED_KEY}"
             fi
