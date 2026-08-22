@@ -6,6 +6,7 @@ on:
 jobs:
   test-ccu3-vpn:
     runs-on: ubuntu-latest
+    permissions: {}
     env:
       WG_INTERFACE: wg-ci
       WG_CONFIG_PATH: /tmp/wg-ci.conf
