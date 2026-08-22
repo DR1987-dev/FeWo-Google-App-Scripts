@@ -145,8 +145,186 @@ jobs:
 
       - name: VPN diagnostics (non-sensitive)
         if: ${{ always() }}
+        env:
+          WG_PRIVATE_KEY: ${{ secrets.WIREGUARD_PRIVATE_KEY }}
+          WG_EXPECTED_SPEEDPORT_PUBLIC_KEY: ${{ vars.WIREGUARD_SPEEDPORT_PUBLIC_KEY }}
+          WG_EXPECTED_CLIENT_PUBLIC_KEY: ${{ vars.WIREGUARD_CLIENT_PUBLIC_KEY }}
+          WG_IPHONE_PUBLIC_KEY: ${{ vars.WIREGUARD_IPHONE_PUBLIC_KEY }}
+          WG_IPHONE_ENDPOINT: ${{ vars.WIREGUARD_IPHONE_ENDPOINT }}
         run: |
           set +e
+          ROOT_CAUSE_CODE="F"
+          ROOT_CAUSE_DETAILS="Keine eindeutige Ursache ermittelt."
+          CONFIG_VALID="true"
+          DNS_OK="true"
+          PORT_OK="true"
+          PEER_OK="true"
+          CLIENT_KEY_OK="true"
+
+          echo "=== WireGuard config check (/tmp/wg-ci.conf, non-sensitive fields only) ==="
+          if [ -f "${WG_CONFIG_PATH}" ]; then
+            CFG_ADDRESS="$(awk -F'=' '/^[[:space:]]*Address[[:space:]]*=/{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' "${WG_CONFIG_PATH}")"
+            CFG_PEER_PUBLIC_KEY="$(awk -F'=' '/^[[:space:]]*PublicKey[[:space:]]*=/{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' "${WG_CONFIG_PATH}")"
+            CFG_ENDPOINT="$(awk -F'=' '/^[[:space:]]*Endpoint[[:space:]]*=/{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' "${WG_CONFIG_PATH}")"
+            CFG_ALLOWED_IPS="$(awk -F'=' '/^[[:space:]]*AllowedIPs[[:space:]]*=/{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' "${WG_CONFIG_PATH}")"
+            CFG_KEEPALIVE="$(awk -F'=' '/^[[:space:]]*PersistentKeepalive[[:space:]]*=/{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' "${WG_CONFIG_PATH}")"
+
+            echo "Interface Address: ${CFG_ADDRESS:-n/a}"
+            echo "Peer PublicKey: ${CFG_PEER_PUBLIC_KEY:-n/a}"
+            echo "Endpoint: ${CFG_ENDPOINT:-n/a}"
+            echo "AllowedIPs: ${CFG_ALLOWED_IPS:-n/a}"
+            echo "PersistentKeepalive: ${CFG_KEEPALIVE:-n/a}"
+          else
+            CONFIG_VALID="false"
+            ROOT_CAUSE_DETAILS="WireGuard-Konfigurationsdatei fehlt."
+            echo "::warning::WireGuard-Konfigurationsdatei ${WG_CONFIG_PATH} nicht gefunden."
+          fi
+          echo
+
+          WIREGUARD_ENDPOINT_HOST=""
+          WIREGUARD_ENDPOINT_PORT=""
+          if [ -n "${CFG_ENDPOINT:-}" ]; then
+            if echo "${CFG_ENDPOINT}" | grep -Eq '^\[[^]]+\]:[0-9]+$'; then
+              WIREGUARD_ENDPOINT_HOST="$(echo "${CFG_ENDPOINT}" | sed -E 's/^\[([^]]+)\]:([0-9]+)$/\1/')"
+              WIREGUARD_ENDPOINT_PORT="$(echo "${CFG_ENDPOINT}" | sed -E 's/^\[([^]]+)\]:([0-9]+)$/\2/')"
+            elif echo "${CFG_ENDPOINT}" | grep -Eq '^[^:]+:[0-9]+$'; then
+              WIREGUARD_ENDPOINT_HOST="${CFG_ENDPOINT%:*}"
+              WIREGUARD_ENDPOINT_PORT="${CFG_ENDPOINT##*:}"
+            else
+              CONFIG_VALID="false"
+              ROOT_CAUSE_DETAILS="WireGuard-Endpoint hat ein ungueltiges Format."
+              echo "::warning::Endpoint-Format ungueltig: ${CFG_ENDPOINT}"
+            fi
+          fi
+          echo "=== wg show ${WG_INTERFACE} (nur angeforderte Felder) ==="
+          WG_SHOW_PEER="$(sudo wg show "${WG_INTERFACE}" peers 2>/dev/null | head -n 1)"
+          WG_SHOW_ENDPOINT="$(sudo wg show "${WG_INTERFACE}" endpoints 2>/dev/null | awk -v peer="${WG_SHOW_PEER}" '$1 == peer {print $2}')"
+          WG_SHOW_ALLOWED_IPS="$(sudo wg show "${WG_INTERFACE}" allowed-ips 2>/dev/null | awk -v peer="${WG_SHOW_PEER}" '$1 == peer {print $2}')"
+          WG_SHOW_HANDSHAKE_TS="$(sudo wg show "${WG_INTERFACE}" latest-handshakes 2>/dev/null | awk -v peer="${WG_SHOW_PEER}" '$1 == peer {print $2}')"
+          WG_SHOW_TRANSFER="$(sudo wg show "${WG_INTERFACE}" transfer 2>/dev/null | awk -v peer="${WG_SHOW_PEER}" '$1 == peer {print $2 " / " $3}')"
+
+          echo "Interface: ${WG_INTERFACE}"
+          echo "Peer PublicKey: ${WG_SHOW_PEER:-n/a}"
+          echo "Endpoint: ${WG_SHOW_ENDPOINT:-n/a}"
+          echo "AllowedIPs: ${WG_SHOW_ALLOWED_IPS:-n/a}"
+          echo "latest handshake: ${WG_SHOW_HANDSHAKE_TS:-n/a}"
+          echo "transfer rx/tx: ${WG_SHOW_TRANSFER:-n/a}"
+          echo
+
+          echo "=== DNS-Aufloesung des WireGuard-Endpoints ==="
+          if [ -n "${WIREGUARD_ENDPOINT_HOST}" ]; then
+            getent hosts "${WIREGUARD_ENDPOINT_HOST}"
+            DNS_RC=$?
+            if [ "${DNS_RC}" -ne 0 ]; then
+              DNS_OK="false"
+              ROOT_CAUSE_CODE="A"
+              ROOT_CAUSE_DETAILS="Endpoint-Hostname konnte nicht aufgeloest werden."
+              echo "::warning::DNS-Aufloesung fehlgeschlagen fuer ${WIREGUARD_ENDPOINT_HOST}."
+            fi
+          else
+            DNS_OK="false"
+            ROOT_CAUSE_CODE="A"
+            ROOT_CAUSE_DETAILS="Endpoint-Hostname fehlt oder konnte nicht aus Endpoint geparst werden."
+            echo "::warning::WIREGUARD_ENDPOINT_HOST ist leer."
+          fi
+          echo
+
+          echo "=== UDP-Port-Pruefung des WireGuard-Endpoints ==="
+          if [ -z "${WIREGUARD_ENDPOINT_PORT}" ] || ! echo "${WIREGUARD_ENDPOINT_PORT}" | grep -Eq '^[0-9]+$'; then
+            PORT_OK="false"
+            ROOT_CAUSE_CODE="D"
+            ROOT_CAUSE_DETAILS="WireGuard-Endpoint-Port fehlt oder ist ungueltig."
+            echo "::warning::WireGuard-Endpoint-Port fehlt oder ist ungueltig: ${WIREGUARD_ENDPOINT_PORT:-leer}."
+          elif [ "${WIREGUARD_ENDPOINT_PORT}" -lt 1 ] || [ "${WIREGUARD_ENDPOINT_PORT}" -gt 65535 ]; then
+            PORT_OK="false"
+            ROOT_CAUSE_CODE="D"
+            ROOT_CAUSE_DETAILS="WireGuard-Endpoint-Port liegt ausserhalb 1-65535."
+            echo "::warning::WireGuard-Endpoint-Port liegt ausserhalb 1-65535: ${WIREGUARD_ENDPOINT_PORT}."
+          elif [ "${DNS_OK}" = "true" ]; then
+            ENDPOINT_IP="$(getent hosts "${WIREGUARD_ENDPOINT_HOST}" | awk 'NR==1{print $1}')"
+            echo "Endpoint Host: ${WIREGUARD_ENDPOINT_HOST}"
+            echo "Endpoint Port: ${WIREGUARD_ENDPOINT_PORT}"
+            echo "Aufgeloeste Endpoint-IP (erste): ${ENDPOINT_IP:-n/a}"
+            if [ -n "${ENDPOINT_IP}" ]; then
+              ip route get "${ENDPOINT_IP}" 2>/dev/null || true
+            fi
+            printf "wg-ci-udp-probe" | nc -u -w 3 "${WIREGUARD_ENDPOINT_HOST}" "${WIREGUARD_ENDPOINT_PORT}" >/dev/null 2>&1
+            UDP_PROBE_RC=$?
+            if [ "${UDP_PROBE_RC}" -eq 0 ]; then
+              echo "UDP-Probe: Paket an Endpoint gesendet (UDP ist verbindungslos, kein Ack erwartet)."
+            else
+              echo "::warning::UDP-Probe konnte nicht gesendet werden (Exit-Code: ${UDP_PROBE_RC})."
+            fi
+          else
+            echo "UDP-Pruefung uebersprungen, da DNS nicht erfolgreich war."
+          fi
+          echo
+
+          echo "=== Peer/PublicKey/PrivateKey Plausibilitaet ==="
+          if [ -n "${CFG_PEER_PUBLIC_KEY:-}" ] && ! echo "${CFG_PEER_PUBLIC_KEY}" | grep -Eq '^[A-Za-z0-9+/]{43}=$'; then
+            PEER_OK="false"
+            ROOT_CAUSE_CODE="B"
+            ROOT_CAUSE_DETAILS="Peer PublicKey hat kein gueltiges WireGuard-Format."
+            echo "::warning::Peer PublicKey hat kein gueltiges Format."
+          fi
+
+          DERIVED_CLIENT_PUBLIC_KEY="$(printf '%s' "${WG_PRIVATE_KEY}" | wg pubkey 2>/dev/null)"
+          unset WG_PRIVATE_KEY
+          if [ -z "${DERIVED_CLIENT_PUBLIC_KEY}" ]; then
+            CLIENT_KEY_OK="false"
+            ROOT_CAUSE_CODE="C"
+            ROOT_CAUSE_DETAILS="WIREGUARD_PRIVATE_KEY konnte nicht in einen PublicKey umgewandelt werden."
+            echo "::warning::WIREGUARD_PRIVATE_KEY ist ungueltig oder nicht mit wg pubkey auswertbar."
+          else
+            DERIVED_CLIENT_PUBLIC_KEY_FINGERPRINT="$(printf '%s' "${DERIVED_CLIENT_PUBLIC_KEY}" | sha256sum | awk '{print $1}' | cut -c1-12)"
+            echo "Derived GitHub client PublicKey fingerprint (sha256, 12 chars): ${DERIVED_CLIENT_PUBLIC_KEY_FINGERPRINT}"
+          fi
+
+          if [ -n "${DERIVED_CLIENT_PUBLIC_KEY}" ] && [ -n "${WG_EXPECTED_CLIENT_PUBLIC_KEY}" ] && [ "${DERIVED_CLIENT_PUBLIC_KEY}" != "${WG_EXPECTED_CLIENT_PUBLIC_KEY}" ]; then
+            CLIENT_KEY_OK="false"
+            ROOT_CAUSE_CODE="C"
+            ROOT_CAUSE_DETAILS="WIREGUARD_PRIVATE_KEY passt nicht zum erwarteten GitHub-Client-PublicKey."
+            echo "::warning::Derived Client PublicKey entspricht nicht WIREGUARD_CLIENT_PUBLIC_KEY."
+          fi
+
+          if [ -n "${DERIVED_CLIENT_PUBLIC_KEY}" ] && [ -n "${CFG_PEER_PUBLIC_KEY:-}" ] && [ "${DERIVED_CLIENT_PUBLIC_KEY}" = "${CFG_PEER_PUBLIC_KEY}" ]; then
+            PEER_OK="false"
+            ROOT_CAUSE_CODE="B"
+            ROOT_CAUSE_DETAILS="Peer PublicKey ist identisch zum GitHub-Client-PublicKey."
+            echo "::warning::Peer PublicKey entspricht dem GitHub-Client-PublicKey (falscher Peer)."
+          fi
+
+          if [ -n "${WG_EXPECTED_SPEEDPORT_PUBLIC_KEY}" ] && [ -n "${CFG_PEER_PUBLIC_KEY:-}" ] && [ "${CFG_PEER_PUBLIC_KEY}" != "${WG_EXPECTED_SPEEDPORT_PUBLIC_KEY}" ]; then
+            PEER_OK="false"
+            ROOT_CAUSE_CODE="B"
+            ROOT_CAUSE_DETAILS="Peer PublicKey stimmt nicht mit dem erwarteten Speedport PublicKey ueberein."
+            echo "::warning::Peer PublicKey stimmt nicht mit WIREGUARD_SPEEDPORT_PUBLIC_KEY ueberein."
+          fi
+
+          if [ -n "${WG_IPHONE_PUBLIC_KEY}" ] && [ -n "${CFG_PEER_PUBLIC_KEY:-}" ] && [ "${CFG_PEER_PUBLIC_KEY}" = "${WG_IPHONE_PUBLIC_KEY}" ]; then
+            PEER_OK="false"
+            ROOT_CAUSE_CODE="B"
+            ROOT_CAUSE_DETAILS="Peer PublicKey ist der iPhone PublicKey statt des Speedport PublicKey."
+            echo "::warning::Peer PublicKey entspricht WIREGUARD_IPHONE_PUBLIC_KEY (falscher Peer)."
+          fi
+
+          if [ -n "${WG_IPHONE_ENDPOINT}" ]; then
+            if [ "${CFG_ENDPOINT:-}" = "${WG_IPHONE_ENDPOINT}" ]; then
+              echo "Endpoint-Abgleich mit iPhone-Konfiguration: IDENTISCH"
+            else
+              if [ "${ROOT_CAUSE_CODE}" = "F" ]; then
+                ROOT_CAUSE_CODE="A"
+                ROOT_CAUSE_DETAILS="Endpoint weicht von WIREGUARD_IPHONE_ENDPOINT ab."
+              fi
+              echo "::warning::Endpoint-Abgleich mit iPhone-Konfiguration: ABWEICHEND"
+              echo "::warning::CI Endpoint: ${CFG_ENDPOINT:-n/a}"
+              echo "::warning::iPhone Endpoint: ${WG_IPHONE_ENDPOINT}"
+            fi
+          else
+            echo "Endpoint-Abgleich mit iPhone-Konfiguration: nicht moeglich (WIREGUARD_IPHONE_ENDPOINT nicht gesetzt)."
+          fi
+          echo
+
           echo "=== Interface check ==="
           if ip link show "${WG_INTERFACE}" >/dev/null 2>&1; then
             echo "WireGuard Interface vorhanden: JA"
@@ -158,25 +336,37 @@ jobs:
             echo "WireGuard Interface vorhanden: NEIN"
           fi
           echo
-          echo "=== wg show (ohne private Keys) ==="
-          sudo wg show "${WG_INTERFACE}" 2>/dev/null || echo "wg show nicht moeglich (Tunnel evtl. nicht aktiv)"
-          echo
           echo "=== Handshake-Status ==="
-          HANDSHAKE_TS=$(sudo wg show "${WG_INTERFACE}" latest-handshakes 2>/dev/null | awk '{print $2}')
+          HANDSHAKE_TS="${WG_SHOW_HANDSHAKE_TS:-0}"
           if [ -n "${HANDSHAKE_TS}" ] && [ "${HANDSHAKE_TS}" != "0" ]; then
             echo "Letzter Handshake Unix-Timestamp: ${HANDSHAKE_TS}"
           else
             echo "Kein Handshake vorhanden (Timestamp: ${HANDSHAKE_TS:-n/a})"
           fi
           echo
-          echo "=== Transfer RX/TX ==="
-          sudo wg show "${WG_INTERFACE}" transfer 2>/dev/null || true
-          echo
           echo "=== Routing table (main) ==="
           ip route
           echo
           echo "=== Route to CCU ==="
           ip route get "${CCU_IP}" 2>/dev/null || echo "Keine Route zur CCU3 gefunden"
+
+          if [ "${HANDSHAKE_STATUS:-FEHLER}" != "OK" ] && [ "${ROOT_CAUSE_CODE}" = "F" ]; then
+            if [ "${CONFIG_VALID}" != "true" ]; then
+              ROOT_CAUSE_DETAILS="WireGuard-Konfiguration ist unvollstaendig oder ungueltig."
+            else
+              ROOT_CAUSE_CODE="E"
+              ROOT_CAUSE_DETAILS="Endpoint/Port/Keys sehen plausibel aus, aber Speedport akzeptiert den Peer nicht (kein Handshake)."
+            fi
+          fi
+
+          echo "HANDSHAKE_ROOT_CAUSE_CODE=${ROOT_CAUSE_CODE}" >> "$GITHUB_ENV"
+          {
+            echo "HANDSHAKE_ROOT_CAUSE_DETAILS<<EOF"
+            echo "${ROOT_CAUSE_DETAILS}"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+          echo "Diagnosecode: ${ROOT_CAUSE_CODE}"
+          echo "Diagnose: ${ROOT_CAUSE_DETAILS}"
 
       - name: Verify tunnel and test CCU3 reachability
         if: ${{ env.WG_STATUS == 'OK' }}
@@ -279,6 +469,8 @@ jobs:
           TCP="${TCP_STATUS:-FEHLER}"
           HTTP="${HTTP_STATUS:-FEHLER}"
           HANDSHAKE="${HANDSHAKE_STATUS:-FEHLER}"
+          HANDSHAKE_DIAG_CODE="${HANDSHAKE_ROOT_CAUSE_CODE:-F}"
+          HANDSHAKE_DIAG_DETAILS="${HANDSHAKE_ROOT_CAUSE_DETAILS:-Keine eindeutige Ursache ermittelt.}"
 
           echo "============================================"
           echo "Testergebnis:"
@@ -306,12 +498,15 @@ jobs:
           # Fall C: WireGuard-Handshake fehlt
           if [ "${HANDSHAKE}" != "OK" ]; then
             echo "Ergebnis: C - WireGuard-Handshake fehlgeschlagen."
-            echo "Moegliche Ursachen:"
-            echo "  - Speedport-Endpoint nicht erreichbar (Firewall, Portweiterleitung, DynDNS?)"
-            echo "  - Derselbe WireGuard-Peer wird gleichzeitig vom iPhone verwendet."
-            echo "    WireGuard unterstuetzt nur eine aktive Session pro Peer."
-            echo "    Loesung: iPhone-Verbindung trennen oder einen zweiten Peer im Speedport anlegen."
-            echo "  - Falscher PublicKey, PrivateKey oder Endpoint in den GitHub Secrets/Variables."
+            echo "Diagnosecode: ${HANDSHAKE_DIAG_CODE}"
+            echo "Diagnose: ${HANDSHAKE_DIAG_DETAILS}"
+            echo "Diagnoseklassen:"
+            echo "  A = Endpoint/DNS/Netzwerkproblem"
+            echo "  B = falscher Peer PublicKey"
+            echo "  C = falscher Client PrivateKey"
+            echo "  D = falscher WireGuard-Port"
+            echo "  E = Speedport akzeptiert den Peer nicht"
+            echo "  F = andere Ursache"
             exit 1
           fi
 
