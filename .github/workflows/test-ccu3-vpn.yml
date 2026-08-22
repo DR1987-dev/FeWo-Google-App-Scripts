@@ -39,9 +39,9 @@ jobs:
       - name: Validate required input
         env:
           WG_PRIVATE_KEY: ${{ secrets.WIREGUARD_PRIVATE_KEY }}
+          WG_PUBLIC_KEY: ${{ secrets.WIREGUARD_PUBLIC_KEY }}
           WG_ADDRESS: ${{ vars.WIREGUARD_ADDRESS }}
           WG_ENDPOINT: ${{ vars.WIREGUARD_ENDPOINT }}
-          WG_SPEEDPORT_PUBLIC_KEY: ${{ vars.WIREGUARD_SPEEDPORT_PUBLIC_KEY }}
         run: |
           set -euo pipefail
           ERRORS=0
@@ -54,12 +54,12 @@ jobs:
               echo "${kind} '${name}': OK"
             fi
           }
-          check_var "CCU_IP"                        "${CCU_IP}"                   "GitHub Variable"
-          check_var "WIREGUARD_ALLOWED_IPS"         "${WIREGUARD_ALLOWED_IPS}"    "GitHub Variable"
-          check_var "WIREGUARD_ADDRESS"             "${WG_ADDRESS}"               "GitHub Variable"
-          check_var "WIREGUARD_ENDPOINT"            "${WG_ENDPOINT}"              "GitHub Variable"
-          check_var "WIREGUARD_SPEEDPORT_PUBLIC_KEY" "${WG_SPEEDPORT_PUBLIC_KEY}" "GitHub Variable"
-          check_var "WIREGUARD_PRIVATE_KEY"         "${WG_PRIVATE_KEY}"           "GitHub Secret"
+          check_var "CCU_IP"                  "${CCU_IP}"                  "GitHub Variable"
+          check_var "WIREGUARD_ALLOWED_IPS"   "${WIREGUARD_ALLOWED_IPS}"   "GitHub Variable"
+          check_var "WIREGUARD_ADDRESS"       "${WG_ADDRESS}"              "GitHub Variable"
+          check_var "WIREGUARD_ENDPOINT"      "${WG_ENDPOINT}"             "GitHub Variable"
+          check_var "WIREGUARD_PRIVATE_KEY"   "${WG_PRIVATE_KEY}"          "GitHub Secret"
+          check_var "WIREGUARD_PUBLIC_KEY"    "${WG_PUBLIC_KEY}"           "GitHub Secret"
           if [ "${ERRORS}" -gt 0 ]; then
             echo "::error::${ERRORS} erforderliche(r) Wert(e) fehlen. Bitte die Repository Secrets und Variables pruefen."
             exit 1
@@ -68,7 +68,7 @@ jobs:
       - name: Create temporary WireGuard config
         env:
           WG_PRIVATE_KEY: ${{ secrets.WIREGUARD_PRIVATE_KEY }}
-          WG_SPEEDPORT_PUBLIC_KEY: ${{ vars.WIREGUARD_SPEEDPORT_PUBLIC_KEY }}
+          WG_PUBLIC_KEY: ${{ secrets.WIREGUARD_PUBLIC_KEY }}
           WG_ADDRESS: ${{ vars.WIREGUARD_ADDRESS }}
           WG_ENDPOINT: ${{ vars.WIREGUARD_ENDPOINT }}
           WG_PRESHARED_KEY: ${{ secrets.WIREGUARD_PRESHARED_KEY }}
@@ -94,7 +94,7 @@ jobs:
             fi
             echo
             echo "[Peer]"
-            echo "PublicKey = ${WG_SPEEDPORT_PUBLIC_KEY}"
+            echo "PublicKey = ${WG_PUBLIC_KEY}"
             if [ -n "${WG_PRESHARED_KEY}" ]; then
               echo "PresharedKey = ${WG_PRESHARED_KEY}"
             fi
