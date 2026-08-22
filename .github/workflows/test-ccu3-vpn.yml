@@ -70,11 +70,10 @@ jobs:
             echo "::error::WIREGUARD_PEER_PUBLIC_KEY hat kein gueltiges WireGuard-Format (Base64, 44 Zeichen)."
             ERRORS=$((ERRORS + 1))
           fi
-          if ! printf '%s' "${WG_PRIVATE_KEY}" | wg pubkey >/dev/null 2>&1; then
+          if ! DERIVED_CLIENT_PUBLIC_KEY="$(printf '%s' "${WG_PRIVATE_KEY}" | wg pubkey 2>/dev/null)" || [ -z "${DERIVED_CLIENT_PUBLIC_KEY}" ]; then
             echo "::error::WIREGUARD_PRIVATE_KEY ist kein gueltiger WireGuard-PrivateKey."
             ERRORS=$((ERRORS + 1))
           else
-            DERIVED_CLIENT_PUBLIC_KEY="$(printf '%s' "${WG_PRIVATE_KEY}" | wg pubkey 2>/dev/null)"
             unset WG_PRIVATE_KEY
             if [ "${DERIVED_CLIENT_PUBLIC_KEY}" = "${WG_PEER_PUBLIC_KEY}" ]; then
               echo "::error::WIREGUARD_PEER_PUBLIC_KEY ist identisch zum abgeleiteten GitHub-Client-PublicKey. Peer und Client muessen unterschiedliche Keys verwenden."
