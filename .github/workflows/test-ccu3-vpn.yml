@@ -163,11 +163,11 @@ jobs:
 
           echo "=== WireGuard config check (/tmp/wg-ci.conf, non-sensitive fields only) ==="
           if [ -f "${WG_CONFIG_PATH}" ]; then
-            CFG_ADDRESS="$(awk -F'=' '/^[[:space:]]*Address[[:space:]]*=/{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' "${WG_CONFIG_PATH}")"
+            CFG_ADDRESS="$(awk '/^[[:space:]]*Address[[:space:]]*=/{sub(/^[[:space:]]*Address[[:space:]]*=[[:space:]]*/,""); sub(/[[:space:]]*$/,""); print; exit}' "${WG_CONFIG_PATH}")"
             CFG_PEER_PUBLIC_KEY="$(awk '/^[[:space:]]*PublicKey[[:space:]]*=/{sub(/^[[:space:]]*PublicKey[[:space:]]*=[[:space:]]*/,""); sub(/[[:space:]]*$/,""); print; exit}' "${WG_CONFIG_PATH}")"
-            CFG_ENDPOINT="$(awk -F'=' '/^[[:space:]]*Endpoint[[:space:]]*=/{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' "${WG_CONFIG_PATH}")"
-            CFG_ALLOWED_IPS="$(awk -F'=' '/^[[:space:]]*AllowedIPs[[:space:]]*=/{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' "${WG_CONFIG_PATH}")"
-            CFG_KEEPALIVE="$(awk -F'=' '/^[[:space:]]*PersistentKeepalive[[:space:]]*=/{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' "${WG_CONFIG_PATH}")"
+            CFG_ENDPOINT="$(awk '/^[[:space:]]*Endpoint[[:space:]]*=/{sub(/^[[:space:]]*Endpoint[[:space:]]*=[[:space:]]*/,""); sub(/[[:space:]]*$/,""); print; exit}' "${WG_CONFIG_PATH}")"
+            CFG_ALLOWED_IPS="$(awk '/^[[:space:]]*AllowedIPs[[:space:]]*=/{sub(/^[[:space:]]*AllowedIPs[[:space:]]*=[[:space:]]*/,""); sub(/[[:space:]]*$/,""); print; exit}' "${WG_CONFIG_PATH}")"
+            CFG_KEEPALIVE="$(awk '/^[[:space:]]*PersistentKeepalive[[:space:]]*=/{sub(/^[[:space:]]*PersistentKeepalive[[:space:]]*=[[:space:]]*/,""); sub(/[[:space:]]*$/,""); print; exit}' "${WG_CONFIG_PATH}")"
 
             echo "Interface Address: ${CFG_ADDRESS:-n/a}"
             echo "Peer PublicKey: ${CFG_PEER_PUBLIC_KEY:-n/a}"
