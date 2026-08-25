@@ -1347,6 +1347,107 @@ function lexwareUploadFile_(blob, fileName) {
     return { ok: true, status: status, fileId: fileId, body: body };
 }
 
+// ---- Sheet: Zahlungen (payments) ---------------------------
+
+var LEXWARE_PAYMENTS_SHEET_NAME = "Lexware_Zahlungen";
+
+/**
+ * Fetches all payments from GET /v1/payments (paginated).
+ * Returns an array of raw payment objects.
+ *
+ * @param {number} [pageSize] - items per page (default 250).
+ * @return {Array}
+ */
+function lexwareGetPayments_(pageSize) {
+    var size = pageSize || 250;
+    var all = [];
+    var page = 0;
+    var maxPages = 200;
+
+    while (page < maxPages) {
+        var params = { page: page, size: size };
+        var result = lexwareRequest("/payments", params);
+        var body = result.body;
+
+        var items = [];
+        var rawArray = false;
+        if (Array.isArray(body)) {
+            items = body;
+            rawArray = true;  // no pagination envelope – treat as complete result
+        } else if (body && Array.isArray(body.content)) {
+            items = body.content;
+        } else if (body && Array.isArray(body.payments)) {
+            items = body.payments;
+        } else if (body && typeof body === "object") {
+            items = [body];
+        }
+
+        all = all.concat(items);
+
+        // Stop if this was the last page
+        if (rawArray) break;
+        var totalPages = body && body.totalPages !== undefined ? body.totalPages : null;
+        var last = body && body.last !== undefined ? body.last : null;
+        if (last === true) break;
+        if (totalPages !== null && page >= totalPages - 1) break;
+        if (items.length < size) break;
+        page++;
+    }
+
+    return all;
+}
+
+/**
+ * Fetches all payments from the Lexware payments endpoint and writes each
+ * payment as a single raw JSON string into the "Lexware_Zahlungen" sheet
+ * (one row per payment). The sheet is cleared and rebuilt on every run.
+ *
+ * This function is intended for manual/debug use only and is NOT called
+ * by importLexwareAll().
+ *
+ * Override the sheet name via script property LEXWARE_PAYMENTS_SHEET_NAME.
+ *
+ * @return {{ok:boolean, sheet:string, total:number}}
+ */
+function importLexwarePayments() {
+    var props = PropertiesService.getScriptProperties();
+    var sheetName = (props.getProperty("LEXWARE_PAYMENTS_SHEET_NAME") || LEXWARE_PAYMENTS_SHEET_NAME).trim();
+
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) throw new Error("No active spreadsheet");
+
+    var sheet = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
+
+    // Fetch all payments
+    var payments = [];
+    try {
+        payments = lexwareGetPayments_();
+    } catch (e) {
+        Logger.log(
+            isLexware404_(e)
+                ? "Lexware: /payments endpoint not available (404) – skipping Zahlungen."
+                : "Lexware: could not fetch payments – skipping Zahlungen: " + e.message
+        );
+        return { ok: false, sheet: sheetName, total: 0, error: e.message };
+    }
+
+    Logger.log("Lexware payments: fetched " + payments.length + " payment(s)");
+
+    // Rebuild sheet from scratch – write one raw JSON string per row
+    sheet.clearContents();
+    sheet.appendRow(["JSON"]);
+    sheet.getRange(1, 1).setFontWeight("bold");
+
+    if (payments.length > 0) {
+        var rows = payments.map(function (p) { return [JSON.stringify(p)]; });
+        sheet.getRange(2, 1, rows.length, 1).setValues(rows);
+    }
+
+    Logger.log("Lexware Zahlungen import complete: total=" + payments.length);
+
+    return { ok: true, sheet: sheetName, total: payments.length };
+}
+
 // ---- All imports -------------------------------------------
 
 /**
@@ -1360,6 +1461,9 @@ function lexwareUploadFile_(blob, fileName) {
  *   7. importLexwareUmsaetze()            – all vouchers with line items (Umsätze)
  *   8. importLexwareKontostand()          – bank account balances (Kontostand)
  *   9. importLexwareFinanzen()            – all bank transactions (Finanzen)
+ *
+ * Note: importLexwarePayments() is intentionally excluded – it is a
+ * manual/debug function and should not run on a schedule.
  */
 function importLexwareAll() {
     importLexwareToSheet();
