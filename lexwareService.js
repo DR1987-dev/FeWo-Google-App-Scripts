@@ -1352,35 +1352,6 @@ function lexwareUploadFile_(blob, fileName) {
 var LEXWARE_PAYMENTS_SHEET_NAME = "Lexware_Zahlungen";
 
 /**
- * All top-level properties returned by the Lexware payments endpoint.
- * See: https://developers.lexware.io/docs/#payments-endpoint-payments-properties
- */
-var LEXWARE_PAYMENTS_HEADERS = [
-    "ID",
-    "Typ",
-    "Betrag",
-    "Währung",
-    "Datum",
-    "Buchungsdatum",
-    "Fälligkeitsdatum",
-    "Referenz",
-    "Notiz",
-    "Status",
-    "Offen",
-    "Gutschrift",
-    "Gegenkonto-ID",
-    "Gegenkonto-Name",
-    "Gegenkonto-Typ",
-    "Beleg-ID",
-    "Beleg-Typ",
-    "Beleg-Nummer",
-    "Kontakt-ID",
-    "Kontakt-Name",
-    "Erstellt am",
-    "Geändert am"
-];
-
-/**
  * Fetches all payments from GET /v1/payments (paginated).
  * Returns an array of raw payment objects.
  *
@@ -1427,16 +1398,16 @@ function lexwareGetPayments_(pageSize) {
 }
 
 /**
- * Fetches all payments from the Lexware payments endpoint and writes them
- * as raw data to the "Lexware_Zahlungen" sheet (one row per payment, one
- * property per column). Existing rows are matched by payment ID for
- * incremental updates.
+ * Fetches all payments from the Lexware payments endpoint and writes each
+ * payment as a single raw JSON string into the "Lexware_Zahlungen" sheet
+ * (one row per payment). The sheet is cleared and rebuilt on every run.
+ *
+ * This function is intended for manual/debug use only and is NOT called
+ * by importLexwareAll().
  *
  * Override the sheet name via script property LEXWARE_PAYMENTS_SHEET_NAME.
  *
- * Can be triggered manually via the Apps Script editor.
- *
- * @return {{ok:boolean, sheet:string, total:number, inserted:number, updated:number}}
+ * @return {{ok:boolean, sheet:string, total:number}}
  */
 function importLexwarePayments() {
     var props = PropertiesService.getScriptProperties();
@@ -1457,125 +1428,24 @@ function importLexwarePayments() {
                 ? "Lexware: /payments endpoint not available (404) – skipping Zahlungen."
                 : "Lexware: could not fetch payments – skipping Zahlungen: " + e.message
         );
-        return { ok: false, sheet: sheetName, total: 0, inserted: 0, updated: 0, error: e.message };
+        return { ok: false, sheet: sheetName, total: 0, error: e.message };
     }
 
     Logger.log("Lexware payments: fetched " + payments.length + " payment(s)");
 
-    // Write header if sheet is empty
-    if (sheet.getLastRow() === 0) {
-        sheet.appendRow(LEXWARE_PAYMENTS_HEADERS);
-        sheet.getRange(1, 1, 1, LEXWARE_PAYMENTS_HEADERS.length).setFontWeight("bold");
+    // Rebuild sheet from scratch – write one raw JSON string per row
+    sheet.clearContents();
+    sheet.appendRow(["JSON"]);
+    sheet.getRange(1, 1).setFontWeight("bold");
+
+    if (payments.length > 0) {
+        var rows = payments.map(function (p) { return [JSON.stringify(p)]; });
+        sheet.getRange(2, 1, rows.length, 1).setValues(rows);
     }
 
-    // Build index of existing rows by ID (column 1)
-    var existingById = {};
-    var lastRow = sheet.getLastRow();
-    if (lastRow > 1) {
-        var existingData = sheet.getRange(2, 1, lastRow - 1, LEXWARE_PAYMENTS_HEADERS.length).getValues();
-        existingData.forEach(function (row, idx) {
-            var id = String(row[0] || "").trim();
-            if (id) existingById[id] = { rowIndex: idx + 2, data: row };
-        });
-    }
+    Logger.log("Lexware Zahlungen import complete: total=" + payments.length);
 
-    /**
-     * Maps a raw payment object to a row array aligned with LEXWARE_PAYMENTS_HEADERS.
-     *
-     * @param {Object} p  A raw payment object from the API.
-     * @return {Array}
-     */
-    function paymentToRow(p) {
-        // Helper: safely stringify nested objects
-        function str(val) {
-            if (val === null || val === undefined) return "";
-            if (typeof val === "object") return JSON.stringify(val);
-            return String(val);
-        }
-        // Helper: extract amount value from a money object or plain number
-        function amount(val) {
-            if (val === null || val === undefined) return "";
-            if (typeof val === "object" && val.value !== undefined) return val.value;
-            return val;
-        }
-        // Helper: extract currency from a money object or dedicated field
-        function currency(obj) {
-            if (obj.currency) return str(obj.currency);
-            if (obj.amount && obj.amount.currency) return str(obj.amount.currency);
-            return "";
-        }
-        // Helper: format ISO date string to "YYYY-MM-DD HH:MM:SS" (or just date part)
-        function fmtDate(val) {
-            if (!val) return "";
-            return String(val).slice(0, 19).replace("T", " ");
-        }
-
-        var voucherRef = p.voucherReference || p.voucher || {};
-        var counterpart = p.counterpart || p.bankAccount || {};
-        var contact = p.contact || {};
-
-        return [
-            str(p.id || p.paymentId || ""),
-            str(p.type || p.paymentType || ""),
-            amount(p.amount),
-            currency(p),
-            fmtDate(p.paymentDate || p.date || ""),
-            fmtDate(p.bookingDate || ""),
-            fmtDate(p.dueDate || ""),
-            str(p.reference || p.paymentReference || ""),
-            str(p.note || p.comment || ""),
-            str(p.status || ""),
-            p.openAmount !== undefined ? p.openAmount : (p.open !== undefined ? p.open : ""),
-            p.isCredit !== undefined ? p.isCredit : (p.credit !== undefined ? p.credit : ""),
-            str(counterpart.id || ""),
-            str(counterpart.name || counterpart.accountName || ""),
-            str(counterpart.type || counterpart.accountType || ""),
-            str(voucherRef.id || voucherRef.voucherId || ""),
-            str(voucherRef.type || voucherRef.voucherType || ""),
-            str(voucherRef.voucherNumber || voucherRef.number || ""),
-            str(contact.id || contact.contactId || ""),
-            str(contact.name || contact.company || contact.person || ""),
-            fmtDate(p.createdDate || p.createdAt || ""),
-            fmtDate(p.updatedDate || p.updatedAt || "")
-        ];
-    }
-
-    var newRows = [];
-    var updatedCount = 0;
-
-    payments.forEach(function (p) {
-        var id = String(p.id || p.paymentId || "").trim();
-        var row = paymentToRow(p);
-
-        if (id && existingById[id]) {
-            var existing = existingById[id].data;
-            var changed = row.some(function (val, i) { return String(val) !== String(existing[i]); });
-            if (changed) {
-                sheet.getRange(existingById[id].rowIndex, 1, 1, row.length).setValues([row]);
-                updatedCount++;
-            }
-        } else {
-            newRows.push(row);
-        }
-    });
-
-    if (newRows.length > 0) {
-        sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, LEXWARE_PAYMENTS_HEADERS.length).setValues(newRows);
-    }
-
-    Logger.log(
-        "Lexware Zahlungen import complete: total=" + payments.length +
-        ", inserted=" + newRows.length +
-        ", updated=" + updatedCount
-    );
-
-    return {
-        ok: true,
-        sheet: sheetName,
-        total: payments.length,
-        inserted: newRows.length,
-        updated: updatedCount
-    };
+    return { ok: true, sheet: sheetName, total: payments.length };
 }
 
 // ---- All imports -------------------------------------------
@@ -1591,7 +1461,9 @@ function importLexwarePayments() {
  *   7. importLexwareUmsaetze()            – all vouchers with line items (Umsätze)
  *   8. importLexwareKontostand()          – bank account balances (Kontostand)
  *   9. importLexwareFinanzen()            – all bank transactions (Finanzen)
- *  10. importLexwarePayments()            – payments (Zahlungen)
+ *
+ * Note: importLexwarePayments() is intentionally excluded – it is a
+ * manual/debug function and should not run on a schedule.
  */
 function importLexwareAll() {
     importLexwareToSheet();
@@ -1619,9 +1491,4 @@ function importLexwareAll() {
         Logger.log("importLexwareKontostand skipped: " + e.message);
     }
     importLexwareFinanzen();
-    try {
-        importLexwarePayments();
-    } catch (e) {
-        Logger.log("importLexwarePayments skipped: " + e.message);
-    }
 }
