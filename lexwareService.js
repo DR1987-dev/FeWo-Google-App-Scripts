@@ -1347,6 +1347,237 @@ function lexwareUploadFile_(blob, fileName) {
     return { ok: true, status: status, fileId: fileId, body: body };
 }
 
+// ---- Sheet: Zahlungen (payments) ---------------------------
+
+var LEXWARE_PAYMENTS_SHEET_NAME = "Lexware_Zahlungen";
+
+/**
+ * All top-level properties returned by the Lexware payments endpoint.
+ * See: https://developers.lexware.io/docs/#payments-endpoint-payments-properties
+ */
+var LEXWARE_PAYMENTS_HEADERS = [
+    "ID",
+    "Typ",
+    "Betrag",
+    "Währung",
+    "Datum",
+    "Buchungsdatum",
+    "Fälligkeitsdatum",
+    "Referenz",
+    "Notiz",
+    "Status",
+    "Offen",
+    "Gutschrift",
+    "Gegenkonto-ID",
+    "Gegenkonto-Name",
+    "Gegenkonto-Typ",
+    "Beleg-ID",
+    "Beleg-Typ",
+    "Beleg-Nummer",
+    "Kontakt-ID",
+    "Kontakt-Name",
+    "Erstellt am",
+    "Geändert am"
+];
+
+/**
+ * Fetches all payments from GET /v1/payments (paginated).
+ * Returns an array of raw payment objects.
+ *
+ * @param {number} [pageSize] - items per page (default 250).
+ * @return {Array}
+ */
+function lexwareGetPayments_(pageSize) {
+    var size = pageSize || 250;
+    var all = [];
+    var page = 0;
+    var maxPages = 200;
+
+    while (page < maxPages) {
+        var params = { page: page, size: size };
+        var result = lexwareRequest("/payments", params);
+        var body = result.body;
+
+        var items = [];
+        var rawArray = false;
+        if (Array.isArray(body)) {
+            items = body;
+            rawArray = true;  // no pagination envelope – treat as complete result
+        } else if (body && Array.isArray(body.content)) {
+            items = body.content;
+        } else if (body && Array.isArray(body.payments)) {
+            items = body.payments;
+        } else if (body && typeof body === "object") {
+            items = [body];
+        }
+
+        all = all.concat(items);
+
+        // Stop if this was the last page
+        if (rawArray) break;
+        var totalPages = body && body.totalPages !== undefined ? body.totalPages : null;
+        var last = body && body.last !== undefined ? body.last : null;
+        if (last === true) break;
+        if (totalPages !== null && page >= totalPages - 1) break;
+        if (items.length < size) break;
+        page++;
+    }
+
+    return all;
+}
+
+/**
+ * Fetches all payments from the Lexware payments endpoint and writes them
+ * as raw data to the "Lexware_Zahlungen" sheet (one row per payment, one
+ * property per column). Existing rows are matched by payment ID for
+ * incremental updates.
+ *
+ * Override the sheet name via script property LEXWARE_PAYMENTS_SHEET_NAME.
+ *
+ * Can be triggered manually via the Apps Script editor.
+ *
+ * @return {{ok:boolean, sheet:string, total:number, inserted:number, updated:number}}
+ */
+function importLexwarePayments() {
+    var props = PropertiesService.getScriptProperties();
+    var sheetName = (props.getProperty("LEXWARE_PAYMENTS_SHEET_NAME") || LEXWARE_PAYMENTS_SHEET_NAME).trim();
+
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) throw new Error("No active spreadsheet");
+
+    var sheet = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
+
+    // Fetch all payments
+    var payments = [];
+    try {
+        payments = lexwareGetPayments_();
+    } catch (e) {
+        Logger.log(
+            isLexware404_(e)
+                ? "Lexware: /payments endpoint not available (404) – skipping Zahlungen."
+                : "Lexware: could not fetch payments – skipping Zahlungen: " + e.message
+        );
+        return { ok: false, sheet: sheetName, total: 0, inserted: 0, updated: 0, error: e.message };
+    }
+
+    Logger.log("Lexware payments: fetched " + payments.length + " payment(s)");
+
+    // Write header if sheet is empty
+    if (sheet.getLastRow() === 0) {
+        sheet.appendRow(LEXWARE_PAYMENTS_HEADERS);
+        sheet.getRange(1, 1, 1, LEXWARE_PAYMENTS_HEADERS.length).setFontWeight("bold");
+    }
+
+    // Build index of existing rows by ID (column 1)
+    var existingById = {};
+    var lastRow = sheet.getLastRow();
+    if (lastRow > 1) {
+        var existingData = sheet.getRange(2, 1, lastRow - 1, LEXWARE_PAYMENTS_HEADERS.length).getValues();
+        existingData.forEach(function (row, idx) {
+            var id = String(row[0] || "").trim();
+            if (id) existingById[id] = { rowIndex: idx + 2, data: row };
+        });
+    }
+
+    /**
+     * Maps a raw payment object to a row array aligned with LEXWARE_PAYMENTS_HEADERS.
+     *
+     * @param {Object} p  A raw payment object from the API.
+     * @return {Array}
+     */
+    function paymentToRow(p) {
+        // Helper: safely stringify nested objects
+        function str(val) {
+            if (val === null || val === undefined) return "";
+            if (typeof val === "object") return JSON.stringify(val);
+            return String(val);
+        }
+        // Helper: extract amount value from a money object or plain number
+        function amount(val) {
+            if (val === null || val === undefined) return "";
+            if (typeof val === "object" && val.value !== undefined) return val.value;
+            return val;
+        }
+        // Helper: extract currency from a money object or dedicated field
+        function currency(obj) {
+            if (obj.currency) return str(obj.currency);
+            if (obj.amount && obj.amount.currency) return str(obj.amount.currency);
+            return "";
+        }
+        // Helper: format ISO date string to "YYYY-MM-DD HH:MM:SS" (or just date part)
+        function fmtDate(val) {
+            if (!val) return "";
+            return String(val).slice(0, 19).replace("T", " ");
+        }
+
+        var voucherRef = p.voucherReference || p.voucher || {};
+        var counterpart = p.counterpart || p.bankAccount || {};
+        var contact = p.contact || {};
+
+        return [
+            str(p.id || p.paymentId || ""),
+            str(p.type || p.paymentType || ""),
+            amount(p.amount),
+            currency(p),
+            fmtDate(p.paymentDate || p.date || ""),
+            fmtDate(p.bookingDate || ""),
+            fmtDate(p.dueDate || ""),
+            str(p.reference || p.paymentReference || ""),
+            str(p.note || p.comment || ""),
+            str(p.status || ""),
+            p.openAmount !== undefined ? p.openAmount : (p.open !== undefined ? p.open : ""),
+            p.isCredit !== undefined ? p.isCredit : (p.credit !== undefined ? p.credit : ""),
+            str(counterpart.id || ""),
+            str(counterpart.name || counterpart.accountName || ""),
+            str(counterpart.type || counterpart.accountType || ""),
+            str(voucherRef.id || voucherRef.voucherId || ""),
+            str(voucherRef.type || voucherRef.voucherType || ""),
+            str(voucherRef.voucherNumber || voucherRef.number || ""),
+            str(contact.id || contact.contactId || ""),
+            str(contact.name || contact.company || contact.person || ""),
+            fmtDate(p.createdDate || p.createdAt || ""),
+            fmtDate(p.updatedDate || p.updatedAt || "")
+        ];
+    }
+
+    var newRows = [];
+    var updatedCount = 0;
+
+    payments.forEach(function (p) {
+        var id = String(p.id || p.paymentId || "").trim();
+        var row = paymentToRow(p);
+
+        if (id && existingById[id]) {
+            var existing = existingById[id].data;
+            var changed = row.some(function (val, i) { return String(val) !== String(existing[i]); });
+            if (changed) {
+                sheet.getRange(existingById[id].rowIndex, 1, 1, row.length).setValues([row]);
+                updatedCount++;
+            }
+        } else {
+            newRows.push(row);
+        }
+    });
+
+    if (newRows.length > 0) {
+        sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, LEXWARE_PAYMENTS_HEADERS.length).setValues(newRows);
+    }
+
+    Logger.log(
+        "Lexware Zahlungen import complete: total=" + payments.length +
+        ", inserted=" + newRows.length +
+        ", updated=" + updatedCount
+    );
+
+    return {
+        ok: true,
+        sheet: sheetName,
+        total: payments.length,
+        inserted: newRows.length,
+        updated: updatedCount
+    };
+}
+
 // ---- All imports -------------------------------------------
 
 /**
@@ -1360,6 +1591,7 @@ function lexwareUploadFile_(blob, fileName) {
  *   7. importLexwareUmsaetze()            – all vouchers with line items (Umsätze)
  *   8. importLexwareKontostand()          – bank account balances (Kontostand)
  *   9. importLexwareFinanzen()            – all bank transactions (Finanzen)
+ *  10. importLexwarePayments()            – payments (Zahlungen)
  */
 function importLexwareAll() {
     importLexwareToSheet();
@@ -1387,4 +1619,9 @@ function importLexwareAll() {
         Logger.log("importLexwareKontostand skipped: " + e.message);
     }
     importLexwareFinanzen();
+    try {
+        importLexwarePayments();
+    } catch (e) {
+        Logger.log("importLexwarePayments skipped: " + e.message);
+    }
 }
