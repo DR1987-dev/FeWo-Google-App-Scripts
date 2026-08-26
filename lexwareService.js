@@ -6,6 +6,7 @@
 
 var LEXWARE_BASE_URL = "https://api.lexware.io/v1";
 var LEXWARE_BANKTRANSACTIONS_BASE_URL = "https://api.lexware.io/banktransactions/v1";
+var LEXWARE_PAYMENTS_BASE_URL = "https://api.lexware.io/payments/v1";
 var LEXWARE_DEFAULT_SHEET_NAME = "Lexware";
 
 // ---- Config ------------------------------------------------
@@ -1352,7 +1353,57 @@ function lexwareUploadFile_(blob, fileName) {
 var LEXWARE_PAYMENTS_SHEET_NAME = "Lexware_Zahlungen";
 
 /**
- * Fetches all payments from GET /v1/payments (paginated).
+ * Fetches one page of payments from Lexware, trying the dedicated
+ * payments API base URL first, then falling back to the standard v1 API.
+ *
+ * @param {number} page     - 0-based page index.
+ * @param {number} pageSize - Items per page.
+ * @return {{status:number, body:*}}
+ */
+function lexwareGetPaymentsPage_(page, pageSize) {
+    var variants = [
+        { name: "payments-api", baseUrl: LEXWARE_PAYMENTS_BASE_URL },
+        { name: "legacy-public-api", baseUrl: LEXWARE_BASE_URL }
+    ];
+    var params = { page: page, size: pageSize };
+    var lastError = null;
+    var had404Variant = false;
+    var attemptedVariants = [];
+    for (var i = 0; i < variants.length; i++) {
+        try {
+            return lexwareRequest("/payments", params, variants[i].baseUrl);
+        } catch (e) {
+            lastError = e;
+            attemptedVariants.push(variants[i].name);
+            if (isLexware404_(e)) {
+                had404Variant = true;
+            } else {
+                Logger.log(
+                    "Lexware payments request variant failed (" +
+                    variants[i].name +
+                    ", page=" + page +
+                    "): " + e.message
+                );
+            }
+        }
+    }
+    if (lastError && isLexware404_(lastError)) {
+        throw new Error(
+            "Lexware payments endpoint not available (404) for variants [" +
+            attemptedVariants.join(", ") + "] on page " + page
+        );
+    }
+    throw new Error(
+        "Lexware payments request failed for variants [" +
+        attemptedVariants.join(", ") + "] on page " + page + ": " +
+        (lastError ? lastError.message : "unknown error") +
+        (had404Variant ? " (at least one variant returned 404)" : "")
+    );
+}
+
+/**
+ * Fetches all payments from GET /payments (paginated), trying the dedicated
+ * payments API first and falling back to the standard v1 API.
  * Returns an array of raw payment objects.
  *
  * @param {number} [pageSize] - items per page (default 250).
@@ -1365,8 +1416,7 @@ function lexwareGetPayments_(pageSize) {
     var maxPages = 200;
 
     while (page < maxPages) {
-        var params = { page: page, size: size };
-        var result = lexwareRequest("/payments", params);
+        var result = lexwareGetPaymentsPage_(page, size);
         var body = result.body;
 
         var items = [];
@@ -1402,8 +1452,8 @@ function lexwareGetPayments_(pageSize) {
  * payment as a single raw JSON string into the "Lexware_Zahlungen" sheet
  * (one row per payment). The sheet is cleared and rebuilt on every run.
  *
- * This function is intended for manual/debug use only and is NOT called
- * by importLexwareAll().
+ * Tries the dedicated payments API first, then falls back to the standard
+ * v1 API. Called by importLexwareAll().
  *
  * Override the sheet name via script property LEXWARE_PAYMENTS_SHEET_NAME.
  *
@@ -1461,9 +1511,7 @@ function importLexwarePayments() {
  *   7. importLexwareUmsaetze()            – all vouchers with line items (Umsätze)
  *   8. importLexwareKontostand()          – bank account balances (Kontostand)
  *   9. importLexwareFinanzen()            – all bank transactions (Finanzen)
- *
- * Note: importLexwarePayments() is intentionally excluded – it is a
- * manual/debug function and should not run on a schedule.
+ *  10. importLexwarePayments()            – payments (Zahlungen)
  */
 function importLexwareAll() {
     importLexwareToSheet();
@@ -1491,4 +1539,9 @@ function importLexwareAll() {
         Logger.log("importLexwareKontostand skipped: " + e.message);
     }
     importLexwareFinanzen();
+    try {
+        importLexwarePayments();
+    } catch (e) {
+        Logger.log("importLexwarePayments skipped: " + e.message);
+    }
 }
