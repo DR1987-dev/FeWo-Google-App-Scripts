@@ -1059,6 +1059,7 @@ function importLexwarePayments() {
         if (!voucherId) return;
 
         var rawEntry = "";
+        var hadFetchError = false;
 
         try {
             var payResult = lexwareRequest("/payments/" + voucherId);
@@ -1066,13 +1067,15 @@ function importLexwarePayments() {
         } catch (e) {
             if (!isLexware404_(e)) {
                 Logger.log("Lexware Zahlungen: Zahlung für Beleg " + voucherId + " fehlgeschlagen: " + e.message);
-                rawEntry = toRawString_({
-                    error: e.message,
-                    voucherId: voucherId
-                });
+                hadFetchError = true;
             } else {
                 rawEntry = "";
             }
+        }
+
+        if (hadFetchError) {
+            Utilities.sleep(300);
+            return;
         }
 
         var row = [voucherId, rawEntry];
