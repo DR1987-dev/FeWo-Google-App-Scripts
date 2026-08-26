@@ -1006,6 +1006,7 @@ function importLexwarePayments() {
 
     var toRawString_ = function (value) {
         if (value === undefined) return "";
+        if (value === null) return "";
         if (typeof value === "string") return value;
         try {
             return JSON.stringify(value);
@@ -1063,7 +1064,7 @@ function importLexwarePayments() {
 
         try {
             var payResult = lexwareRequest("/payments/" + voucherId);
-            rawEntry = toRawString_(payResult ? payResult.body : null);
+            rawEntry = toRawString_(payResult ? payResult.body : undefined);
         } catch (e) {
             if (!isLexware404_(e)) {
                 Logger.log("Lexware Zahlungen: Zahlung für Beleg " + voucherId + " fehlgeschlagen: " + e.message);
@@ -1074,6 +1075,7 @@ function importLexwarePayments() {
         }
 
         if (hadFetchError) {
+            // Keep request pacing even when a voucher payment call fails.
             Utilities.sleep(300);
             return;
         }
