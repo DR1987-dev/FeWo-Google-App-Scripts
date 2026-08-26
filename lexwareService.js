@@ -964,6 +964,7 @@ var LEXWARE_ZAHLUNGEN_HEADERS = [
     "Roheintrag"
 ];
 var LEXWARE_SHEETS_MAX_CELL_CHARS = 50000;
+var LEXWARE_ZAHLUNGEN_LEGACY_COLUMN_COUNT = 13;
 
 /**
  * Fetches payment information for every salesinvoice and purchaseinvoice voucher
@@ -999,7 +1000,8 @@ function importLexwarePayments() {
         }
         if (!isExpectedHeader) {
             var firstHeader = String(sheet.getRange(1, 1).getValue() || "").trim();
-            var isLegacyLexwareHeader = firstHeader === "Beleg-ID";
+            var isLegacyLexwareHeader = firstHeader === "Beleg-ID" &&
+                currentColumnCount === LEXWARE_ZAHLUNGEN_LEGACY_COLUMN_COUNT;
             if (!isLegacyLexwareHeader && firstHeader !== "") {
                 throw new Error(
                     "Lexware Zahlungen: Unerwartete Header-Struktur in '" + sheetName +
@@ -1097,7 +1099,11 @@ function importLexwarePayments() {
                 Logger.log("Lexware Zahlungen: Zahlung für Beleg " + voucherId + " fehlgeschlagen: " + e.message);
                 hadFetchError = true;
             } else {
-                rawEntry = "";
+                rawEntry = toRawString_({
+                    status: 404,
+                    error: "payment_not_found",
+                    voucherId: voucherId
+                });
             }
         }
 
