@@ -1063,7 +1063,7 @@ function importLexwarePayments() {
                 Logger.log("Lexware Zahlungen: Zahlung für Beleg " + voucherId + " fehlgeschlagen: " + e.message);
                 rawEntry = "ERROR: " + e.message;
             } else {
-                rawEntry = "null";
+                rawEntry = "";
             }
         }
 
