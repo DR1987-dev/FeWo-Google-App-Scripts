@@ -987,6 +987,16 @@ function importLexwarePayments() {
     if (sheet.getLastRow() === 0) {
         sheet.appendRow(LEXWARE_ZAHLUNGEN_HEADERS);
         sheet.getRange(1, 1, 1, LEXWARE_ZAHLUNGEN_HEADERS.length).setFontWeight("bold");
+    } else {
+        var currentHeaders = sheet.getRange(1, 1, 1, LEXWARE_ZAHLUNGEN_HEADERS.length).getValues()[0];
+        var isExpectedHeader = LEXWARE_ZAHLUNGEN_HEADERS.every(function (h, i) {
+            return String(currentHeaders[i] || "").trim() === h;
+        });
+        if (!isExpectedHeader) {
+            sheet.clearContents();
+            sheet.appendRow(LEXWARE_ZAHLUNGEN_HEADERS);
+            sheet.getRange(1, 1, 1, LEXWARE_ZAHLUNGEN_HEADERS.length).setFontWeight("bold");
+        }
     }
 
     var toRawString_ = function (value) {
