@@ -1005,7 +1005,11 @@ function importLexwarePayments() {
                     "'. Bitte manuell prüfen oder Blatt leeren."
                 );
             }
-            Logger.log("Lexware Zahlungen: Schema-Migration erkannt – Blattinhalt wird auf 2-Spalten-Rohformat zurückgesetzt.");
+            Logger.log(
+                firstHeader === ""
+                    ? "Lexware Zahlungen: Leeres/inkonsistentes Blatt erkannt – 2-Spalten-Rohformat wird initialisiert."
+                    : "Lexware Zahlungen: Legacy-Schema erkannt – Blattinhalt wird auf 2-Spalten-Rohformat zurückgesetzt."
+            );
             sheet.clearContents();
             sheet.appendRow(LEXWARE_ZAHLUNGEN_HEADERS);
             sheet.getRange(1, 1, 1, LEXWARE_ZAHLUNGEN_HEADERS.length).setFontWeight("bold");
@@ -1082,22 +1086,18 @@ function importLexwarePayments() {
             }
         }
 
-        if (hadFetchError) {
-            // Keep request pacing even when a voucher payment call fails.
-            Utilities.sleep(300);
-            return;
-        }
-
-        var row = [voucherId, rawEntry];
-        if (existingById[voucherId]) {
-            var existing = existingById[voucherId].data;
-            var changed = row.some(function (val, i) { return String(val) !== String(existing[i]); });
-            if (changed) {
-                sheet.getRange(existingById[voucherId].rowIndex, 1, 1, row.length).setValues([row]);
-                updatedCount++;
+        if (!hadFetchError) {
+            var row = [voucherId, rawEntry];
+            if (existingById[voucherId]) {
+                var existing = existingById[voucherId].data;
+                var changed = row.some(function (val, i) { return String(val) !== String(existing[i]); });
+                if (changed) {
+                    sheet.getRange(existingById[voucherId].rowIndex, 1, 1, row.length).setValues([row]);
+                    updatedCount++;
+                }
+            } else {
+                newRows.push(row);
             }
-        } else {
-            newRows.push(row);
         }
 
         // Courtesy pause after each payment request to respect the 2 req/s rate limit.
