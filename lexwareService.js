@@ -997,6 +997,14 @@ function importLexwarePayments() {
             });
         }
         if (!isExpectedHeader) {
+            var firstHeader = String(sheet.getRange(1, 1).getValue() || "").trim();
+            var isLegacyLexwareHeader = firstHeader === "Beleg-ID";
+            if (!isLegacyLexwareHeader && firstHeader !== "") {
+                throw new Error(
+                    "Lexware Zahlungen: Unerwartete Header-Struktur in '" + sheetName +
+                    "'. Bitte manuell prüfen oder Blatt leeren."
+                );
+            }
             Logger.log("Lexware Zahlungen: Schema-Migration erkannt – Blattinhalt wird auf 2-Spalten-Rohformat zurückgesetzt.");
             sheet.clearContents();
             sheet.appendRow(LEXWARE_ZAHLUNGEN_HEADERS);
