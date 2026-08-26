@@ -988,10 +988,14 @@ function importLexwarePayments() {
         sheet.appendRow(LEXWARE_ZAHLUNGEN_HEADERS);
         sheet.getRange(1, 1, 1, LEXWARE_ZAHLUNGEN_HEADERS.length).setFontWeight("bold");
     } else {
-        var currentHeaders = sheet.getRange(1, 1, 1, LEXWARE_ZAHLUNGEN_HEADERS.length).getValues()[0];
+        var currentColumnCount = sheet.getLastColumn();
+        var currentHeaders = sheet.getRange(1, 1, 1, Math.max(currentColumnCount, LEXWARE_ZAHLUNGEN_HEADERS.length)).getValues()[0];
         var isExpectedHeader = LEXWARE_ZAHLUNGEN_HEADERS.every(function (h, i) {
             return String(currentHeaders[i] || "").trim() === h;
         });
+        if (currentColumnCount !== LEXWARE_ZAHLUNGEN_HEADERS.length) {
+            isExpectedHeader = false;
+        }
         if (!isExpectedHeader) {
             sheet.clearContents();
             sheet.appendRow(LEXWARE_ZAHLUNGEN_HEADERS);
@@ -1061,7 +1065,10 @@ function importLexwarePayments() {
         } catch (e) {
             if (!isLexware404_(e)) {
                 Logger.log("Lexware Zahlungen: Zahlung für Beleg " + voucherId + " fehlgeschlagen: " + e.message);
-                rawEntry = "ERROR: " + e.message;
+                rawEntry = toRawString_({
+                    error: e.message,
+                    voucherId: voucherId
+                });
             } else {
                 rawEntry = "";
             }
