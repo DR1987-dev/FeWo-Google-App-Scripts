@@ -963,6 +963,7 @@ var LEXWARE_ZAHLUNGEN_HEADERS = [
     "ID",
     "Roheintrag"
 ];
+var LEXWARE_SHEETS_MAX_CELL_CHARS = 50000;
 
 /**
  * Fetches payment information for every salesinvoice and purchaseinvoice voucher
@@ -1019,22 +1020,36 @@ function importLexwarePayments() {
     var toRawString_ = function (value) {
         if (value === undefined) return "";
         if (value === null) return "";
-        if (typeof value === "string") return value;
-        try {
-            return JSON.stringify(value);
-        } catch (e) {
-            return String(value);
+        if (typeof value === "string") {
+            return value.length > LEXWARE_SHEETS_MAX_CELL_CHARS
+                ? value.slice(0, LEXWARE_SHEETS_MAX_CELL_CHARS)
+                : value;
         }
+        var normalized = "";
+        try {
+            normalized = JSON.stringify(value);
+        } catch (e) {
+            normalized = String(value);
+        }
+        return normalized.length > LEXWARE_SHEETS_MAX_CELL_CHARS
+            ? normalized.slice(0, LEXWARE_SHEETS_MAX_CELL_CHARS)
+            : normalized;
     };
 
     // Index existing rows by ID in column A.
     var existingById = {};
+    var staleLegacyKeyRows = [];
     var lastRow = sheet.getLastRow();
     if (lastRow > 1) {
         var existingData = sheet.getRange(2, 1, lastRow - 1, LEXWARE_ZAHLUNGEN_HEADERS.length).getValues();
         existingData.forEach(function (row, idx) {
             var key = String(row[0] || "").trim();
-            if (key) existingById[key] = { rowIndex: idx + 2, data: row };
+            if (!key) return;
+            if (/_\d+$/.test(key)) {
+                staleLegacyKeyRows.push(idx + 2);
+                return;
+            }
+            existingById[key] = { rowIndex: idx + 2, data: row };
         });
     }
 
@@ -1106,6 +1121,12 @@ function importLexwarePayments() {
 
     if (newRows.length > 0) {
         sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, LEXWARE_ZAHLUNGEN_HEADERS.length).setValues(newRows);
+    }
+
+    if (staleLegacyKeyRows.length > 0) {
+        staleLegacyKeyRows.sort(function (a, b) { return b - a; });
+        staleLegacyKeyRows.forEach(function (rowIndex) { sheet.deleteRow(rowIndex); });
+        Logger.log("Lexware Zahlungen: " + staleLegacyKeyRows.length + " veraltete Legacy-Zeile(n) entfernt.");
     }
 
     Logger.log(
