@@ -960,28 +960,18 @@ function lexwareUploadFile_(blob, fileName) {
 var LEXWARE_ZAHLUNGEN_SHEET_NAME = "Lexware_Zahlungen";
 
 var LEXWARE_ZAHLUNGEN_HEADERS = [
-    "Beleg-ID",
-    "Belegnummer",
-    "Belegdatum",
-    "Belegtyp",
-    "Kontakt",
-    "Gesamtbetrag",
-    "Währung",
-    "Zahlungsstatus",
-    "Offener Betrag",
-    "Zahlungsdatum",
-    "Gezahlter Betrag",
-    "Zahlungsweise",
-    "Notiz"
+    "ID",
+    "Roheintrag"
 ];
+var LEXWARE_SHEETS_MAX_CELL_CHARS = 50000;
+var LEXWARE_ZAHLUNGEN_LEGACY_COLUMN_COUNT = 13;
 
 /**
  * Fetches payment information for every salesinvoice and purchaseinvoice voucher
- * by calling GET /v1/payments/{voucherId} once per voucher, then writes the
- * results to the "Lexware_Zahlungen" sheet (one row per payment item, or one
- * summary row when a voucher has no individual payment items).
- *
- * Rows are matched by Beleg-ID + Zeilen-Index to support incremental updates.
+ * by calling GET /v1/payments/{voucherId} once per voucher, then writes one
+ * raw entry row per voucher into the "Lexware_Zahlungen" sheet:
+ *   - column A: voucher ID
+ *   - column B: raw payment response as string
  *
  * Override the sheet name via script property LEXWARE_ZAHLUNGEN_SHEET_NAME.
  *
@@ -999,18 +989,69 @@ function importLexwarePayments() {
     if (sheet.getLastRow() === 0) {
         sheet.appendRow(LEXWARE_ZAHLUNGEN_HEADERS);
         sheet.getRange(1, 1, 1, LEXWARE_ZAHLUNGEN_HEADERS.length).setFontWeight("bold");
+    } else {
+        var currentColumnCount = sheet.getLastColumn();
+        var isExpectedHeader = false;
+        if (currentColumnCount === LEXWARE_ZAHLUNGEN_HEADERS.length) {
+            var currentHeaders = sheet.getRange(1, 1, 1, LEXWARE_ZAHLUNGEN_HEADERS.length).getValues()[0];
+            isExpectedHeader = LEXWARE_ZAHLUNGEN_HEADERS.every(function (h, i) {
+                return String(currentHeaders[i] || "").trim() === h;
+            });
+        }
+        if (!isExpectedHeader) {
+            var firstHeader = String(sheet.getRange(1, 1).getValue() || "").trim();
+            var isLegacyLexwareHeader = firstHeader === "Beleg-ID" &&
+                currentColumnCount === LEXWARE_ZAHLUNGEN_LEGACY_COLUMN_COUNT;
+            if (!isLegacyLexwareHeader && firstHeader !== "") {
+                throw new Error(
+                    "Lexware Zahlungen: Unerwartete Header-Struktur in '" + sheetName +
+                    "'. Bitte manuell prüfen oder Blatt leeren."
+                );
+            }
+            Logger.log(
+                firstHeader === ""
+                    ? "Lexware Zahlungen: Leeres/inkonsistentes Blatt erkannt – 2-Spalten-Rohformat wird initialisiert."
+                    : "Lexware Zahlungen: Legacy-Schema erkannt – Blattinhalt wird auf 2-Spalten-Rohformat zurückgesetzt."
+            );
+            sheet.clearContents();
+            sheet.appendRow(LEXWARE_ZAHLUNGEN_HEADERS);
+            sheet.getRange(1, 1, 1, LEXWARE_ZAHLUNGEN_HEADERS.length).setFontWeight("bold");
+        }
     }
 
-    // Index existing rows by composite key stored in column A.
-    // The key format is: "<voucherId>_<itemIndex>" where itemIndex is 0 for
-    // summary-only rows (no payment items) and 1-based for real payment items.
+    var toRawString_ = function (value) {
+        if (value === undefined) return "";
+        if (value === null) return "";
+        if (typeof value === "string") {
+            return value.length > LEXWARE_SHEETS_MAX_CELL_CHARS
+                ? value.slice(0, LEXWARE_SHEETS_MAX_CELL_CHARS)
+                : value;
+        }
+        var normalized = "";
+        try {
+            normalized = JSON.stringify(value);
+        } catch (e) {
+            normalized = String(value);
+        }
+        return normalized.length > LEXWARE_SHEETS_MAX_CELL_CHARS
+            ? normalized.slice(0, LEXWARE_SHEETS_MAX_CELL_CHARS)
+            : normalized;
+    };
+
+    // Index existing rows by ID in column A.
     var existingById = {};
+    var staleLegacyKeyRows = [];
     var lastRow = sheet.getLastRow();
     if (lastRow > 1) {
         var existingData = sheet.getRange(2, 1, lastRow - 1, LEXWARE_ZAHLUNGEN_HEADERS.length).getValues();
         existingData.forEach(function (row, idx) {
             var key = String(row[0] || "").trim();
-            if (key) existingById[key] = { rowIndex: idx + 2, data: row };
+            if (!key) return;
+            if (/_\d+$/.test(key)) {
+                staleLegacyKeyRows.push(idx + 2);
+                return;
+            }
+            existingById[key] = { rowIndex: idx + 2, data: row };
         });
     }
 
@@ -1042,109 +1083,43 @@ function importLexwarePayments() {
 
     var newRows = [];
     var updatedCount = 0;
-    // Collect sheet row indices of stale summary rows that need to be deleted
-    // (rows with key voucherId_0 that are replaced by real payment items).
-    var staleRowIndices = [];
 
     allVouchers.forEach(function (v) {
         var voucherId = String(v.id || "").trim();
         if (!voucherId) return;
 
-        var belegnummer  = v.voucherNumber || "";
-        var belegdatum   = v.voucherDate ? String(v.voucherDate).slice(0, 10) : "";
-        var belegtyp     = v.voucherType || "";
-        var kontakt      = v.contactName || "";
-        var gesamtbetrag = v.totalAmount !== undefined ? v.totalAmount : "";
-        var waehrung     = v.currency || "EUR";
-
-        var zahlungsstatus = "";
-        var offenerBetrag  = "";
-        var paymentItems   = [];
+        var rawEntry = "";
+        var hadFetchError = false;
 
         try {
             var payResult = lexwareRequest("/payments/" + voucherId);
-            var pay = payResult.body;
-            if (pay) {
-                zahlungsstatus = pay.paymentStatus || "";
-                if (pay.openAmount !== undefined && pay.openAmount !== null) {
-                    offenerBetrag = typeof pay.openAmount === "object"
-                        ? (pay.openAmount.value !== undefined ? pay.openAmount.value : "")
-                        : pay.openAmount;
-                }
-                if (Array.isArray(pay.paymentItems)) {
-                    paymentItems = pay.paymentItems;
-                }
-            }
+            rawEntry = toRawString_(payResult ? payResult.body : undefined);
         } catch (e) {
             if (!isLexware404_(e)) {
                 Logger.log("Lexware Zahlungen: Zahlung für Beleg " + voucherId + " fehlgeschlagen: " + e.message);
-            }
-            // Still write a summary row with whatever we have
-        }
-
-        // One row per payment item; fall back to a single summary row.
-        // Summary-only rows use key suffix "_0" to distinguish them from real
-        // payment items (1-based suffixes). When real payment items are found,
-        // mark any pre-existing "_0" summary row for deletion to avoid stale data.
-        var hasSummaryOnly = paymentItems.length === 0;
-        var items = hasSummaryOnly ? [null] : paymentItems;
-
-        if (!hasSummaryOnly) {
-            var summaryKey = voucherId + "_0";
-            if (existingById[summaryKey]) {
-                staleRowIndices.push(existingById[summaryKey].rowIndex);
-                delete existingById[summaryKey];
+                hadFetchError = true;
+            } else {
+                rawEntry = toRawString_({
+                    status: 404,
+                    error: "payment_not_found",
+                    voucherId: voucherId
+                });
             }
         }
 
-        items.forEach(function (item, idx) {
-            var rowKey = hasSummaryOnly
-                ? voucherId + "_0"
-                : voucherId + "_" + (idx + 1);
-
-            var zahlungsdatum  = "";
-            var gezahlterBetrag = "";
-            var zahlungsweise  = "";
-            var notiz          = "";
-
-            if (item) {
-                zahlungsdatum = item.paymentDate ? String(item.paymentDate).slice(0, 10) : "";
-                if (item.amount !== undefined && item.amount !== null) {
-                    gezahlterBetrag = typeof item.amount === "object"
-                        ? (item.amount.value !== undefined ? item.amount.value : "")
-                        : item.amount;
-                }
-                zahlungsweise = item.paymentMethod || item.paymentType || "";
-                notiz         = item.note || item.description || "";
-            }
-
-            var row = [
-                rowKey,
-                belegnummer,
-                belegdatum,
-                belegtyp,
-                kontakt,
-                gesamtbetrag,
-                waehrung,
-                zahlungsstatus,
-                offenerBetrag,
-                zahlungsdatum,
-                gezahlterBetrag,
-                zahlungsweise,
-                notiz
-            ];
-
-            if (existingById[rowKey]) {
-                var existing = existingById[rowKey].data;
+        if (!hadFetchError) {
+            var row = [voucherId, rawEntry];
+            if (existingById[voucherId]) {
+                var existing = existingById[voucherId].data;
                 var changed = row.some(function (val, i) { return String(val) !== String(existing[i]); });
                 if (changed) {
-                    sheet.getRange(existingById[rowKey].rowIndex, 1, 1, row.length).setValues([row]);
+                    sheet.getRange(existingById[voucherId].rowIndex, 1, 1, row.length).setValues([row]);
                     updatedCount++;
                 }
             } else {
                 newRows.push(row);
             }
-        });
+        }
 
         // Courtesy pause after each payment request to respect the 2 req/s rate limit.
         Utilities.sleep(300);
@@ -1154,14 +1129,10 @@ function importLexwarePayments() {
         sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, LEXWARE_ZAHLUNGEN_HEADERS.length).setValues(newRows);
     }
 
-    // Delete stale summary rows (_0) that were superseded by real payment items.
-    // Delete from bottom to top so that row index shifts do not affect earlier deletes.
-    if (staleRowIndices.length > 0) {
-        staleRowIndices.sort(function (a, b) { return b - a; });
-        staleRowIndices.forEach(function (rowIndex) {
-            sheet.deleteRow(rowIndex);
-        });
-        Logger.log("Lexware Zahlungen: " + staleRowIndices.length + " veraltete Zusammenfassungszeile(n) gelöscht.");
+    if (staleLegacyKeyRows.length > 0) {
+        staleLegacyKeyRows.sort(function (a, b) { return b - a; });
+        staleLegacyKeyRows.forEach(function (rowIndex) { sheet.deleteRow(rowIndex); });
+        Logger.log("Lexware Zahlungen: " + staleLegacyKeyRows.length + " veraltete Legacy-Zeile(n) entfernt.");
     }
 
     Logger.log(
