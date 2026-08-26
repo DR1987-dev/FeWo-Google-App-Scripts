@@ -989,14 +989,15 @@ function importLexwarePayments() {
         sheet.getRange(1, 1, 1, LEXWARE_ZAHLUNGEN_HEADERS.length).setFontWeight("bold");
     } else {
         var currentColumnCount = sheet.getLastColumn();
-        var currentHeaders = sheet.getRange(1, 1, 1, Math.max(currentColumnCount, LEXWARE_ZAHLUNGEN_HEADERS.length)).getValues()[0];
-        var isExpectedHeader = LEXWARE_ZAHLUNGEN_HEADERS.every(function (h, i) {
-            return String(currentHeaders[i] || "").trim() === h;
-        });
-        if (currentColumnCount !== LEXWARE_ZAHLUNGEN_HEADERS.length) {
-            isExpectedHeader = false;
+        var isExpectedHeader = false;
+        if (currentColumnCount === LEXWARE_ZAHLUNGEN_HEADERS.length) {
+            var currentHeaders = sheet.getRange(1, 1, 1, LEXWARE_ZAHLUNGEN_HEADERS.length).getValues()[0];
+            isExpectedHeader = LEXWARE_ZAHLUNGEN_HEADERS.every(function (h, i) {
+                return String(currentHeaders[i] || "").trim() === h;
+            });
         }
         if (!isExpectedHeader) {
+            Logger.log("Lexware Zahlungen: Schema-Migration erkannt – Blattinhalt wird auf 2-Spalten-Rohformat zurückgesetzt.");
             sheet.clearContents();
             sheet.appendRow(LEXWARE_ZAHLUNGEN_HEADERS);
             sheet.getRange(1, 1, 1, LEXWARE_ZAHLUNGEN_HEADERS.length).setFontWeight("bold");
