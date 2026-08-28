@@ -967,10 +967,11 @@ var LEXWARE_SHEETS_MAX_CELL_CHARS = 50000;
 var LEXWARE_ZAHLUNGEN_LEGACY_COLUMN_COUNT = 13;
 
 /**
- * Fetches all salesinvoice and purchaseinvoice vouchers from the voucherlist and
+ * Fetches all salesinvoice and purchaseinvoice vouchers from the voucherlist,
+ * then for each voucher retrieves the full details via GET /v1/vouchers/{id} and
  * writes one raw entry row per voucher into the "Lexware_Zahlungen" sheet:
  *   - column A: voucher ID
- *   - column B: raw voucher JSON string as returned by the voucherlist endpoint
+ *   - column B: raw voucher detail JSON string as returned by /v1/vouchers/{id}
  *
  * Override the sheet name via script property LEXWARE_ZAHLUNGEN_SHEET_NAME.
  *
@@ -1087,18 +1088,41 @@ function importLexwarePayments() {
         var voucherId = String(v.id || "").trim();
         if (!voucherId) return;
 
-        var rawEntry = toRawString_(v);
-        var row = [voucherId, rawEntry];
-        if (existingById[voucherId]) {
-            var existing = existingById[voucherId].data;
-            var changed = row.some(function (val, i) { return String(val) !== String(existing[i]); });
-            if (changed) {
-                sheet.getRange(existingById[voucherId].rowIndex, 1, 1, row.length).setValues([row]);
-                updatedCount++;
+        var rawEntry = "";
+        var hadFetchError = false;
+
+        try {
+            var detailResult = lexwareGetVoucherDetail_(voucherId);
+            rawEntry = toRawString_(detailResult ? detailResult.body : undefined);
+        } catch (e) {
+            if (!isLexware404_(e)) {
+                Logger.log("Lexware Zahlungen: Belegdetail für " + voucherId + " fehlgeschlagen: " + e.message);
+                hadFetchError = true;
+            } else {
+                rawEntry = toRawString_({
+                    status: 404,
+                    error: "voucher_not_found",
+                    voucherId: voucherId
+                });
             }
-        } else {
-            newRows.push(row);
         }
+
+        if (!hadFetchError) {
+            var row = [voucherId, rawEntry];
+            if (existingById[voucherId]) {
+                var existing = existingById[voucherId].data;
+                var changed = row.some(function (val, i) { return String(val) !== String(existing[i]); });
+                if (changed) {
+                    sheet.getRange(existingById[voucherId].rowIndex, 1, 1, row.length).setValues([row]);
+                    updatedCount++;
+                }
+            } else {
+                newRows.push(row);
+            }
+        }
+
+        // Courtesy pause to respect the 2 req/s rate limit.
+        Utilities.sleep(300);
     });
 
     if (newRows.length > 0) {
