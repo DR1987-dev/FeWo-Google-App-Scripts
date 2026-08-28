@@ -967,11 +967,10 @@ var LEXWARE_SHEETS_MAX_CELL_CHARS = 50000;
 var LEXWARE_ZAHLUNGEN_LEGACY_COLUMN_COUNT = 13;
 
 /**
- * Fetches payment information for every salesinvoice and purchaseinvoice voucher
- * by calling GET /v1/payments/{voucherId} once per voucher, then writes one
- * raw entry row per voucher into the "Lexware_Zahlungen" sheet:
+ * Fetches all salesinvoice and purchaseinvoice vouchers from the voucherlist and
+ * writes one raw entry row per voucher into the "Lexware_Zahlungen" sheet:
  *   - column A: voucher ID
- *   - column B: raw payment response as string
+ *   - column B: raw voucher JSON string as returned by the voucherlist endpoint
  *
  * Override the sheet name via script property LEXWARE_ZAHLUNGEN_SHEET_NAME.
  *
@@ -1079,7 +1078,7 @@ function importLexwarePayments() {
         } while (page < totalPages);
     });
 
-    Logger.log("Lexware Zahlungen: " + allVouchers.length + " Belege zum Abrufen der Zahlungen gefunden");
+    Logger.log("Lexware Zahlungen: " + allVouchers.length + " Belege gefunden");
 
     var newRows = [];
     var updatedCount = 0;
@@ -1088,41 +1087,18 @@ function importLexwarePayments() {
         var voucherId = String(v.id || "").trim();
         if (!voucherId) return;
 
-        var rawEntry = "";
-        var hadFetchError = false;
-
-        try {
-            var payResult = lexwareRequest("/payments/" + voucherId);
-            rawEntry = toRawString_(payResult ? payResult.body : undefined);
-        } catch (e) {
-            if (!isLexware404_(e)) {
-                Logger.log("Lexware Zahlungen: Zahlung für Beleg " + voucherId + " fehlgeschlagen: " + e.message);
-                hadFetchError = true;
-            } else {
-                rawEntry = toRawString_({
-                    status: 404,
-                    error: "payment_not_found",
-                    voucherId: voucherId
-                });
+        var rawEntry = toRawString_(v);
+        var row = [voucherId, rawEntry];
+        if (existingById[voucherId]) {
+            var existing = existingById[voucherId].data;
+            var changed = row.some(function (val, i) { return String(val) !== String(existing[i]); });
+            if (changed) {
+                sheet.getRange(existingById[voucherId].rowIndex, 1, 1, row.length).setValues([row]);
+                updatedCount++;
             }
+        } else {
+            newRows.push(row);
         }
-
-        if (!hadFetchError) {
-            var row = [voucherId, rawEntry];
-            if (existingById[voucherId]) {
-                var existing = existingById[voucherId].data;
-                var changed = row.some(function (val, i) { return String(val) !== String(existing[i]); });
-                if (changed) {
-                    sheet.getRange(existingById[voucherId].rowIndex, 1, 1, row.length).setValues([row]);
-                    updatedCount++;
-                }
-            } else {
-                newRows.push(row);
-            }
-        }
-
-        // Courtesy pause after each payment request to respect the 2 req/s rate limit.
-        Utilities.sleep(300);
     });
 
     if (newRows.length > 0) {
@@ -1161,7 +1137,7 @@ function importLexwarePayments() {
  *   5. setupLexwareKontoZuordnungSheet()  – ensures Konto-Zuordnung sheet exists
  *   6. syncLexwareKundenSheet()           – contacts cache (Kunden & Lieferanten)
  *   7. importLexwareUmsaetze()            – all vouchers with line items (Umsätze)
- *   8. importLexwarePayments()            – payment status per voucher (Zahlungen)
+ *   8. importLexwarePayments()            – raw voucher strings (Zahlungen)
  */
 function importLexwareAll() {
     importLexwareToSheet();
