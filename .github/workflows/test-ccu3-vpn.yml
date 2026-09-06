@@ -27,6 +27,8 @@ jobs:
       # Standard: 192.168.2.0/24
       WIREGUARD_ALLOWED_IPS: ${{ vars.WIREGUARD_ALLOWED_IPS || '192.168.2.0/24' }}
       WIREGUARD_KEEPALIVE: ${{ vars.WIREGUARD_KEEPALIVE || '25' }}
+      # Optional: true erzwingt DynDNS/FQDN im Endpoint statt fixer IP.
+      WIREGUARD_REQUIRE_DYNDNS_ENDPOINT: ${{ vars.WIREGUARD_REQUIRE_DYNDNS_ENDPOINT || 'false' }}
 
     steps:
       - name: Install WireGuard and tools
@@ -42,6 +44,7 @@ jobs:
           WG_PEER_PUBLIC_KEY: ${{ vars.WIREGUARD_PEER_PUBLIC_KEY }}
           WG_ADDRESS: ${{ vars.WIREGUARD_ADDRESS }}
           WG_ENDPOINT: ${{ vars.WIREGUARD_ENDPOINT }}
+          WG_REQUIRE_DYNDNS_ENDPOINT: ${{ vars.WIREGUARD_REQUIRE_DYNDNS_ENDPOINT || 'false' }}
         run: |
           set -euo pipefail
           ERRORS=0
@@ -64,6 +67,28 @@ jobs:
             echo "::error::${ERRORS} erforderliche(r) Wert(e) fehlen. Bitte die Repository Secrets und Variables pruefen."
             exit 1
           fi
+
+          # Endpoint-Host aus host:port bzw. [ipv6]:port extrahieren.
+          WG_ENDPOINT_HOST=""
+          if echo "${WG_ENDPOINT}" | grep -Eq '^\[[^]]+\]:[0-9]+$'; then
+            WG_ENDPOINT_HOST="$(echo "${WG_ENDPOINT}" | sed -E 's/^\[([^]]+)\]:([0-9]+)$/\1/')"
+          elif echo "${WG_ENDPOINT}" | grep -Eq '^[^:]+:[0-9]+$'; then
+            WG_ENDPOINT_HOST="${WG_ENDPOINT%:*}"
+          else
+            echo "::error::WIREGUARD_ENDPOINT hat kein gueltiges Format. Erwartet: host:port oder [ipv6]:port"
+            ERRORS=$((ERRORS + 1))
+          fi
+
+          # DynDNS/FQDN-Pruefung: fixer Endpoint per IP ist fehleranfaellig bei wechselnder WAN-IP.
+          WG_REQUIRE_DYNDNS_NORMALIZED="$(printf '%s' "${WG_REQUIRE_DYNDNS_ENDPOINT}" | tr '[:upper:]' '[:lower:]')"
+          if [ -n "${WG_ENDPOINT_HOST}" ] && echo "${WG_ENDPOINT_HOST}" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$|^[0-9A-Fa-f:]+$'; then
+            echo "::warning::WIREGUARD_ENDPOINT verwendet eine feste IP (${WG_ENDPOINT_HOST}). DynDNS/FQDN wird empfohlen, damit WAN-IP-Aenderungen nicht zu Handshake-Fehlern fuehren."
+            if [ "${WG_REQUIRE_DYNDNS_NORMALIZED}" = "true" ]; then
+              echo "::error::WIREGUARD_REQUIRE_DYNDNS_ENDPOINT=true, aber WIREGUARD_ENDPOINT ist eine feste IP. Bitte DynDNS/FQDN verwenden (z. B. dein-host.ipv64.net:PORT)."
+              ERRORS=$((ERRORS + 1))
+            fi
+          fi
+
           # Validierung: Keys haben gueltiges WireGuard-Format (Base64, 44 Zeichen, endet auf =)
           WG_KEY_REGEX='^[A-Za-z0-9+/]{43}=$'
           if ! printf '%s' "${WG_PEER_PUBLIC_KEY}" | grep -Eq "${WG_KEY_REGEX}"; then
@@ -391,7 +416,7 @@ jobs:
           echo "Diagnose: ${ROOT_CAUSE_DETAILS}"
 
       - name: Verify tunnel and test CCU3 reachability
-        if: ${{ env.WG_STATUS == 'OK' }}
+        if: ${{ env.WG_STATUS == 'OK' && env.HANDSHAKE_STATUS == 'OK' }}
         run: |
           set +e
 
