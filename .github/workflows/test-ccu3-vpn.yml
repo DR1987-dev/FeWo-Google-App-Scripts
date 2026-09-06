@@ -586,10 +586,14 @@ jobs:
           DEVICELIST_URL="${DEVICELIST_URL_BASE}"
           STATELIST_URL="${STATELIST_URL_BASE}"
           XMLAPI_AUTH_ARGS=()
-          if [ -n "${CCU_XMLAPI_SID:-}" ]; then
-            XMLAPI_URL="$(append_query_param "${XMLAPI_URL_BASE}" "sid" "${CCU_XMLAPI_SID}")"
-            DEVICELIST_URL="$(append_query_param "${DEVICELIST_URL_BASE}" "sid" "${CCU_XMLAPI_SID}")"
-            STATELIST_URL="$(append_query_param "${STATELIST_URL_BASE}" "sid" "${CCU_XMLAPI_SID}")"
+          CCU_XMLAPI_SID_CLEAN="$(printf '%s' "${CCU_XMLAPI_SID:-}" | tr -d '\r\n[:space:]')"
+          if [ -n "${CCU_XMLAPI_SID_CLEAN}" ]; then
+            if [ "${CCU_XMLAPI_SID_CLEAN}" != "${CCU_XMLAPI_SID:-}" ]; then
+              echo "::warning::CCU_XMLAPI_SID enthielt Whitespace/Zeilenumbrueche und wurde bereinigt."
+            fi
+            XMLAPI_URL="$(append_query_param "${XMLAPI_URL_BASE}" "sid" "${CCU_XMLAPI_SID_CLEAN}")"
+            DEVICELIST_URL="$(append_query_param "${DEVICELIST_URL_BASE}" "sid" "${CCU_XMLAPI_SID_CLEAN}")"
+            STATELIST_URL="$(append_query_param "${STATELIST_URL_BASE}" "sid" "${CCU_XMLAPI_SID_CLEAN}")"
             echo "XML-API Auth-Modus: SID-Token"
           elif [ -n "${CCU_XMLAPI_USER}" ] && [ -n "${CCU_XMLAPI_PASSWORD}" ]; then
             XMLAPI_AUTH_ARGS=(-u "${CCU_XMLAPI_USER}:${CCU_XMLAPI_PASSWORD}")
@@ -599,8 +603,14 @@ jobs:
           fi
 
           XMLAPI_BODY_FILE="/tmp/ccu-xmlapi-response.xml"
-          XMLAPI_HTTP_CODE="$(curl --connect-timeout 10 --max-time 20 -sS "${XMLAPI_AUTH_ARGS[@]}" -o "${XMLAPI_BODY_FILE}" -w "%{http_code}" "${XMLAPI_URL}" 2>/dev/null || true)"
+          XMLAPI_ERR_FILE="/tmp/ccu-xmlapi-error.log"
+          : > "${XMLAPI_BODY_FILE}"
+          XMLAPI_HTTP_CODE="$(curl --connect-timeout 10 --max-time 20 --retry 2 --retry-delay 1 --retry-connrefused -sS "${XMLAPI_AUTH_ARGS[@]}" -o "${XMLAPI_BODY_FILE}" -w "%{http_code}" "${XMLAPI_URL}" 2>"${XMLAPI_ERR_FILE}" || true)"
           echo "XML-API HTTP-Status: ${XMLAPI_HTTP_CODE:-keine Antwort}"
+          if [ "${XMLAPI_HTTP_CODE}" = "000" ]; then
+            echo "::warning::curl konnte ${CCU_XMLAPI_PATH} nicht abrufen (HTTP 000)."
+            tail -n 3 "${XMLAPI_ERR_FILE}" 2>/dev/null || true
+          fi
 
           if [ "${XMLAPI_HTTP_CODE}" = "200" ] \
             && grep -qiE '<[[:space:]]*(stateList|systemVariables|xml)' "${XMLAPI_BODY_FILE}" \
@@ -614,7 +624,7 @@ jobs:
             fi
             echo "::warning::XML-API nicht erreichbar oder unerwartete Antwort. URL: ${XMLAPI_URL}"
           fi
-          rm -f "${XMLAPI_BODY_FILE}"
+          rm -f "${XMLAPI_BODY_FILE}" "${XMLAPI_ERR_FILE}"
 
           echo
           echo "=== Keypad-Auswertung ueber XML-API ==="
@@ -622,12 +632,25 @@ jobs:
           STATELIST_FILE_RAW="/tmp/ccu-statelist.xml"
           DEVICELIST_FILE="/tmp/ccu-devicelist.pretty.xml"
           STATELIST_FILE="/tmp/ccu-statelist.pretty.xml"
+          DEVICELIST_ERR_FILE="/tmp/ccu-devicelist-error.log"
+          STATELIST_ERR_FILE="/tmp/ccu-statelist-error.log"
 
-          DEVICELIST_HTTP_CODE="$(curl --connect-timeout 10 --max-time 20 -sS "${XMLAPI_AUTH_ARGS[@]}" -o "${DEVICELIST_FILE_RAW}" -w "%{http_code}" "${DEVICELIST_URL}" 2>/dev/null || true)"
-          STATELIST_HTTP_CODE="$(curl --connect-timeout 10 --max-time 20 -sS "${XMLAPI_AUTH_ARGS[@]}" -o "${STATELIST_FILE_RAW}" -w "%{http_code}" "${STATELIST_URL}" 2>/dev/null || true)"
+          : > "${DEVICELIST_FILE_RAW}"
+          : > "${STATELIST_FILE_RAW}"
+
+          DEVICELIST_HTTP_CODE="$(curl --connect-timeout 10 --max-time 20 --retry 2 --retry-delay 1 --retry-connrefused -sS "${XMLAPI_AUTH_ARGS[@]}" -o "${DEVICELIST_FILE_RAW}" -w "%{http_code}" "${DEVICELIST_URL}" 2>"${DEVICELIST_ERR_FILE}" || true)"
+          STATELIST_HTTP_CODE="$(curl --connect-timeout 10 --max-time 20 --retry 2 --retry-delay 1 --retry-connrefused -sS "${XMLAPI_AUTH_ARGS[@]}" -o "${STATELIST_FILE_RAW}" -w "%{http_code}" "${STATELIST_URL}" 2>"${STATELIST_ERR_FILE}" || true)"
 
           echo "devicelist.cgi HTTP-Status: ${DEVICELIST_HTTP_CODE:-keine Antwort}"
           echo "statelist.cgi HTTP-Status: ${STATELIST_HTTP_CODE:-keine Antwort}"
+          if [ "${DEVICELIST_HTTP_CODE}" = "000" ]; then
+            echo "::warning::curl konnte devicelist.cgi nicht abrufen (HTTP 000)."
+            tail -n 3 "${DEVICELIST_ERR_FILE}" 2>/dev/null || true
+          fi
+          if [ "${STATELIST_HTTP_CODE}" = "000" ]; then
+            echo "::warning::curl konnte statelist.cgi nicht abrufen (HTTP 000)."
+            tail -n 3 "${STATELIST_ERR_FILE}" 2>/dev/null || true
+          fi
 
           DEVICELIST_BYTES="$(wc -c < "${DEVICELIST_FILE_RAW}" 2>/dev/null || echo 0)"
           STATELIST_BYTES="$(wc -c < "${STATELIST_FILE_RAW}" 2>/dev/null || echo 0)"
@@ -741,7 +764,7 @@ jobs:
               echo "KEYPAD_STATUS=FEHLER" >> "$GITHUB_ENV"
             fi
           fi
-          rm -f "${DEVICELIST_FILE_RAW}" "${STATELIST_FILE_RAW}" "${DEVICELIST_FILE}" "${STATELIST_FILE}"
+          rm -f "${DEVICELIST_FILE_RAW}" "${STATELIST_FILE_RAW}" "${DEVICELIST_FILE}" "${STATELIST_FILE}" "${DEVICELIST_ERR_FILE}" "${STATELIST_ERR_FILE}"
 
           if [ "${TCP_80}" != "true" ] && [ "${TCP_443}" != "true" ]; then
             echo
