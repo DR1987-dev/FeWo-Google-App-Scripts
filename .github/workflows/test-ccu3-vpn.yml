@@ -37,6 +37,8 @@ jobs:
       CCU_XMLAPI_PATH: ${{ vars.CCU_XMLAPI_PATH || '/addons/xmlapi/statelist.cgi' }}
       # Regex fuer die Erkennung von Keypad-Geraeten ueber Name/Typ.
       CCU_KEYPAD_MATCH_REGEX: ${{ vars.CCU_KEYPAD_MATCH_REGEX || 'WKP|KEYPAD|KeyPad|TASTATUR' }}
+      # Optional: true erzwingt mindestens ein Keypad-Match in der XML-API-Auswertung.
+      CCU_REQUIRE_KEYPAD_MATCH: ${{ vars.CCU_REQUIRE_KEYPAD_MATCH || 'false' }}
 
     steps:
       - name: Install WireGuard and tools
@@ -73,6 +75,7 @@ jobs:
           check_var "CCU_REQUIRE_HMIP_PORT"     "${CCU_REQUIRE_HMIP_PORT}"   "GitHub Variable"
           check_var "CCU_XMLAPI_PATH"           "${CCU_XMLAPI_PATH}"         "GitHub Variable"
           check_var "CCU_KEYPAD_MATCH_REGEX"    "${CCU_KEYPAD_MATCH_REGEX}"  "GitHub Variable"
+          check_var "CCU_REQUIRE_KEYPAD_MATCH"  "${CCU_REQUIRE_KEYPAD_MATCH}" "GitHub Variable"
           check_var "WIREGUARD_PRIVATE_KEY"     "${WG_PRIVATE_KEY}"          "GitHub Secret"
           check_var "WIREGUARD_PEER_PUBLIC_KEY" "${WG_PEER_PUBLIC_KEY}"      "GitHub Variable"
           if [ "${ERRORS}" -gt 0 ]; then
@@ -112,6 +115,11 @@ jobs:
           CCU_REQUIRE_HMIP_PORT_NORMALIZED="$(printf '%s' "${CCU_REQUIRE_HMIP_PORT}" | tr '[:upper:]' '[:lower:]')"
           if [ "${CCU_REQUIRE_HMIP_PORT_NORMALIZED}" != "true" ] && [ "${CCU_REQUIRE_HMIP_PORT_NORMALIZED}" != "false" ]; then
             echo "::error::CCU_REQUIRE_HMIP_PORT muss 'true' oder 'false' sein."
+            ERRORS=$((ERRORS + 1))
+          fi
+          CCU_REQUIRE_KEYPAD_MATCH_NORMALIZED="$(printf '%s' "${CCU_REQUIRE_KEYPAD_MATCH}" | tr '[:upper:]' '[:lower:]')"
+          if [ "${CCU_REQUIRE_KEYPAD_MATCH_NORMALIZED}" != "true" ] && [ "${CCU_REQUIRE_KEYPAD_MATCH_NORMALIZED}" != "false" ]; then
+            echo "::error::CCU_REQUIRE_KEYPAD_MATCH muss 'true' oder 'false' sein."
             ERRORS=$((ERRORS + 1))
           fi
           if [ "${CCU_XMLAPI_PATH#'/'}" = "${CCU_XMLAPI_PATH}" ]; then
@@ -458,7 +466,7 @@ jobs:
           echo "HTTP_STATUS=FEHLER" >> "$GITHUB_ENV"
           echo "HMIP_STATUS=FEHLER" >> "$GITHUB_ENV"
           echo "XMLAPI_STATUS=FEHLER" >> "$GITHUB_ENV"
-          echo "KEYPAD_STATUS=FEHLER" >> "$GITHUB_ENV"
+          echo "KEYPAD_STATUS=WARN" >> "$GITHUB_ENV"
           echo "VPN_STATUS=FEHLER" >> "$GITHUB_ENV"
 
           if ip link show "${WG_INTERFACE}" >/dev/null 2>&1; then
@@ -587,6 +595,10 @@ jobs:
             KEYPAD_CANDIDATES="$(grep -Ei '<device ' "${DEVICELIST_FILE}" | grep -Ei "${CCU_KEYPAD_MATCH_REGEX}" || true)"
             if [ -z "${KEYPAD_CANDIDATES}" ]; then
               echo "::warning::Keine Keypad-Geraete gefunden. Regex: ${CCU_KEYPAD_MATCH_REGEX}"
+              CCU_REQUIRE_KEYPAD_MATCH_NORMALIZED="$(printf '%s' "${CCU_REQUIRE_KEYPAD_MATCH}" | tr '[:upper:]' '[:lower:]')"
+              if [ "${CCU_REQUIRE_KEYPAD_MATCH_NORMALIZED}" = "true" ]; then
+                echo "KEYPAD_STATUS=FEHLER" >> "$GITHUB_ENV"
+              fi
             else
               echo "Gefundene Keypad-Geraete:"
               printf '%s\n' "${KEYPAD_CANDIDATES}" | sed 's/^/  /'
@@ -594,6 +606,10 @@ jobs:
               KEYPAD_ADDRESSES="$(printf '%s\n' "${KEYPAD_CANDIDATES}" | sed -n 's/.* address="\([^"]*\)".*/\1/p' | sort -u)"
               if [ -z "${KEYPAD_ADDRESSES}" ]; then
                 echo "::warning::Keypad-Kandidaten gefunden, aber keine Adressen extrahiert."
+                CCU_REQUIRE_KEYPAD_MATCH_NORMALIZED="$(printf '%s' "${CCU_REQUIRE_KEYPAD_MATCH}" | tr '[:upper:]' '[:lower:]')"
+                if [ "${CCU_REQUIRE_KEYPAD_MATCH_NORMALIZED}" = "true" ]; then
+                  echo "KEYPAD_STATUS=FEHLER" >> "$GITHUB_ENV"
+                fi
               else
                 while IFS= read -r KEYPAD_ADDR; do
                   [ -z "${KEYPAD_ADDR}" ] && continue
@@ -610,6 +626,10 @@ jobs:
             fi
           else
             echo "::warning::Keypad-Auswertung uebersprungen, da devicelist/statelist nicht abrufbar war."
+            CCU_REQUIRE_KEYPAD_MATCH_NORMALIZED="$(printf '%s' "${CCU_REQUIRE_KEYPAD_MATCH}" | tr '[:upper:]' '[:lower:]')"
+            if [ "${CCU_REQUIRE_KEYPAD_MATCH_NORMALIZED}" = "true" ]; then
+              echo "KEYPAD_STATUS=FEHLER" >> "$GITHUB_ENV"
+            fi
           fi
           rm -f "${DEVICELIST_FILE_RAW}" "${STATELIST_FILE_RAW}" "${DEVICELIST_FILE}" "${STATELIST_FILE}"
 
@@ -731,6 +751,18 @@ jobs:
             echo "  - CCU_XMLAPI_PATH ist korrekt (Standard: /addons/xmlapi/statelist.cgi)"
             echo "  - Falls WebUI abgesichert ist: Secrets CCU_XMLAPI_USER/CCU_XMLAPI_PASSWORD setzen"
             exit 1
+          fi
+
+          CCU_REQUIRE_KEYPAD_MATCH_NORMALIZED="$(printf '%s' "${CCU_REQUIRE_KEYPAD_MATCH}" | tr '[:upper:]' '[:lower:]')"
+          if [ "${KEYPAD}" != "OK" ]; then
+            if [ "${CCU_REQUIRE_KEYPAD_MATCH_NORMALIZED}" = "true" ]; then
+              echo "Ergebnis: K - Keypad-Daten konnten nicht verifiziert werden (Regex/Match fehlt)."
+              echo "Pruefen:"
+              echo "  - CCU_KEYPAD_MATCH_REGEX auf Name/Typ/Adresse des Keypads anpassen"
+              echo "  - XML-API devicelist/statelist enthalten das Keypad"
+              exit 1
+            fi
+            echo "::warning::Keypad-Daten nicht verifiziert, aber nicht erzwungen (CCU_REQUIRE_KEYPAD_MATCH=false)."
           fi
 
           echo "Ergebnis: Unbekannter Fehler. Bitte Logs pruefen."
