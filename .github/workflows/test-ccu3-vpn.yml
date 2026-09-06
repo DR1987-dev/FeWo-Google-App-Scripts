@@ -628,10 +628,32 @@ jobs:
               if [ -n "${CCU_KEYPAD_SERIAL}" ]; then
                 echo "::warning::Fallback-Serial wurde verwendet, aber ebenfalls kein Treffer: ${CCU_KEYPAD_SERIAL}"
               fi
-              echo "--- Diagnose: HmIP/WKP-Kandidaten aus devicelist.cgi (max. 40 Zeilen) ---"
-              grep -Ei '<device ' "${DEVICELIST_FILE}" | grep -Ei 'HmIP|WKP|KEYPAD|TAST' | head -n 40 || true
-              echo "--- Diagnose: HmIP/WKP-Kandidaten aus statelist.cgi (max. 40 Zeilen) ---"
-              grep -Ei '<device ' "${STATELIST_FILE}" | grep -Ei 'HmIP|WKP|KEYPAD|TAST' | head -n 40 || true
+              DEV_DEVICE_COUNT="$(grep -Ec '<device ' "${DEVICELIST_FILE}" || true)"
+              STATE_DEVICE_COUNT="$(grep -Ec '<device ' "${STATELIST_FILE}" || true)"
+              DEV_CHANNEL_COUNT="$(grep -Ec '<channel ' "${DEVICELIST_FILE}" || true)"
+              STATE_CHANNEL_COUNT="$(grep -Ec '<channel ' "${STATELIST_FILE}" || true)"
+              echo "--- Diagnose: XML-Zaehler ---"
+              echo "devicelist: devices=${DEV_DEVICE_COUNT} channels=${DEV_CHANNEL_COUNT}"
+              echo "statelist:  devices=${STATE_DEVICE_COUNT} channels=${STATE_CHANNEL_COUNT}"
+
+              echo "--- Diagnose: Volltextsuche in devicelist (HmIP|WKP|KEYPAD|TAST|Serial, max. 80) ---"
+              if [ -n "${CCU_KEYPAD_SERIAL}" ]; then
+                grep -Ein "HmIP|WKP|KEYPAD|TAST|${CCU_KEYPAD_SERIAL}" "${DEVICELIST_FILE}" | head -n 80 || true
+              else
+                grep -Ein "HmIP|WKP|KEYPAD|TAST" "${DEVICELIST_FILE}" | head -n 80 || true
+              fi
+
+              echo "--- Diagnose: Volltextsuche in statelist (HmIP|WKP|KEYPAD|TAST|Serial, max. 80) ---"
+              if [ -n "${CCU_KEYPAD_SERIAL}" ]; then
+                grep -Ein "HmIP|WKP|KEYPAD|TAST|${CCU_KEYPAD_SERIAL}" "${STATELIST_FILE}" | head -n 80 || true
+              else
+                grep -Ein "HmIP|WKP|KEYPAD|TAST" "${STATELIST_FILE}" | head -n 80 || true
+              fi
+
+              echo "--- Diagnose: Erste 30 device-Zeilen aus devicelist ---"
+              grep -Ei '<device ' "${DEVICELIST_FILE}" | head -n 30 || true
+              echo "--- Diagnose: Erste 30 device-Zeilen aus statelist ---"
+              grep -Ei '<device ' "${STATELIST_FILE}" | head -n 30 || true
               CCU_REQUIRE_KEYPAD_MATCH_NORMALIZED="$(printf '%s' "${CCU_REQUIRE_KEYPAD_MATCH}" | tr '[:upper:]' '[:lower:]')"
               if [ "${CCU_REQUIRE_KEYPAD_MATCH_NORMALIZED}" = "true" ]; then
                 echo "KEYPAD_STATUS=FEHLER" >> "$GITHUB_ENV"
