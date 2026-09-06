@@ -37,6 +37,8 @@ jobs:
       CCU_XMLAPI_PATH: ${{ vars.CCU_XMLAPI_PATH || '/addons/xmlapi/statelist.cgi' }}
       # Regex fuer die Erkennung von Keypad-Geraeten ueber Name/Typ.
       CCU_KEYPAD_MATCH_REGEX: ${{ vars.CCU_KEYPAD_MATCH_REGEX || 'WKP|KEYPAD|KeyPad|TASTATUR' }}
+      # Optional: Serielle Basisadresse des Keypads (z. B. 002E9F29993E22) fuer Fallback-Matching.
+      CCU_KEYPAD_SERIAL: ${{ vars.CCU_KEYPAD_SERIAL || '' }}
       # Optional: true erzwingt mindestens ein Keypad-Match in der XML-API-Auswertung.
       CCU_REQUIRE_KEYPAD_MATCH: ${{ vars.CCU_REQUIRE_KEYPAD_MATCH || 'false' }}
 
@@ -75,6 +77,7 @@ jobs:
           check_var "CCU_REQUIRE_HMIP_PORT"     "${CCU_REQUIRE_HMIP_PORT}"   "GitHub Variable"
           check_var "CCU_XMLAPI_PATH"           "${CCU_XMLAPI_PATH}"         "GitHub Variable"
           check_var "CCU_KEYPAD_MATCH_REGEX"    "${CCU_KEYPAD_MATCH_REGEX}"  "GitHub Variable"
+          echo "GitHub Variable 'CCU_KEYPAD_SERIAL': ${CCU_KEYPAD_SERIAL:-<leer>}"
           check_var "CCU_REQUIRE_KEYPAD_MATCH"  "${CCU_REQUIRE_KEYPAD_MATCH}" "GitHub Variable"
           check_var "WIREGUARD_PRIVATE_KEY"     "${WG_PRIVATE_KEY}"          "GitHub Secret"
           check_var "WIREGUARD_PEER_PUBLIC_KEY" "${WG_PEER_PUBLIC_KEY}"      "GitHub Variable"
@@ -120,6 +123,10 @@ jobs:
           CCU_REQUIRE_KEYPAD_MATCH_NORMALIZED="$(printf '%s' "${CCU_REQUIRE_KEYPAD_MATCH}" | tr '[:upper:]' '[:lower:]')"
           if [ "${CCU_REQUIRE_KEYPAD_MATCH_NORMALIZED}" != "true" ] && [ "${CCU_REQUIRE_KEYPAD_MATCH_NORMALIZED}" != "false" ]; then
             echo "::error::CCU_REQUIRE_KEYPAD_MATCH muss 'true' oder 'false' sein."
+            ERRORS=$((ERRORS + 1))
+          fi
+          if [ -n "${CCU_KEYPAD_SERIAL}" ] && ! printf '%s' "${CCU_KEYPAD_SERIAL}" | grep -Eq '^[0-9A-Fa-f]{6,32}$'; then
+            echo "::error::CCU_KEYPAD_SERIAL muss alphanumerisch/hex sein (z. B. 002E9F29993E22)."
             ERRORS=$((ERRORS + 1))
           fi
           if [ "${CCU_XMLAPI_PATH#'/'}" = "${CCU_XMLAPI_PATH}" ]; then
@@ -592,37 +599,68 @@ jobs:
             sed 's/></>\n</g' "${DEVICELIST_FILE_RAW}" > "${DEVICELIST_FILE}"
             sed 's/></>\n</g' "${STATELIST_FILE_RAW}" > "${STATELIST_FILE}"
 
-            KEYPAD_CANDIDATES="$(grep -Ei '<device ' "${DEVICELIST_FILE}" | grep -Ei "${CCU_KEYPAD_MATCH_REGEX}" || true)"
-            if [ -z "${KEYPAD_CANDIDATES}" ]; then
+            KEYPAD_HINT_LINES_DEV="$(grep -Ei '<device |<channel ' "${DEVICELIST_FILE}" | grep -Ei "${CCU_KEYPAD_MATCH_REGEX}" || true)"
+            KEYPAD_HINT_LINES_STATE="$(grep -Ei '<device |<channel ' "${STATELIST_FILE}" | grep -Ei "${CCU_KEYPAD_MATCH_REGEX}" || true)"
+
+            if [ -n "${CCU_KEYPAD_SERIAL}" ]; then
+              SERIAL_HINT_LINES_DEV="$(grep -Ei '<device |<channel ' "${DEVICELIST_FILE}" | grep -Ei "address=\"${CCU_KEYPAD_SERIAL}(:[0-9]+)?\"|serial=\"${CCU_KEYPAD_SERIAL}\"" || true)"
+              SERIAL_HINT_LINES_STATE="$(grep -Ei '<device |<channel ' "${STATELIST_FILE}" | grep -Ei "address=\"${CCU_KEYPAD_SERIAL}(:[0-9]+)?\"|serial=\"${CCU_KEYPAD_SERIAL}\"" || true)"
+              KEYPAD_HINT_LINES_DEV="$(printf '%s\n%s\n' "${KEYPAD_HINT_LINES_DEV}" "${SERIAL_HINT_LINES_DEV}" | sed '/^$/d' || true)"
+              KEYPAD_HINT_LINES_STATE="$(printf '%s\n%s\n' "${KEYPAD_HINT_LINES_STATE}" "${SERIAL_HINT_LINES_STATE}" | sed '/^$/d' || true)"
+            fi
+
+            KEYPAD_ADDRESSES="$(
+              printf '%s\n%s\n' "${KEYPAD_HINT_LINES_DEV}" "${KEYPAD_HINT_LINES_STATE}" \
+              | sed -n 's/.* address="\([^"]*\)".*/\1/p' \
+              | sed -E 's/:[0-9]+$//' \
+              | sed '/^$/d' \
+              | sort -u
+            )"
+            if [ -n "${CCU_KEYPAD_SERIAL}" ]; then
+              SERIAL_MATCH_LINES="$(printf '%s\n%s\n' "${SERIAL_HINT_LINES_DEV:-}" "${SERIAL_HINT_LINES_STATE:-}" | sed '/^$/d' || true)"
+              if [ -n "${SERIAL_MATCH_LINES}" ]; then
+                KEYPAD_ADDRESSES="$(printf '%s\n%s\n' "${KEYPAD_ADDRESSES}" "${CCU_KEYPAD_SERIAL}" | sed '/^$/d' | sort -u)"
+              fi
+            fi
+
+            if [ -z "${KEYPAD_ADDRESSES}" ]; then
               echo "::warning::Keine Keypad-Geraete gefunden. Regex: ${CCU_KEYPAD_MATCH_REGEX}"
+              if [ -n "${CCU_KEYPAD_SERIAL}" ]; then
+                echo "::warning::Fallback-Serial wurde verwendet, aber ebenfalls kein Treffer: ${CCU_KEYPAD_SERIAL}"
+              fi
+              echo "--- Diagnose: HmIP/WKP-Kandidaten aus devicelist.cgi (max. 40 Zeilen) ---"
+              grep -Ei '<device ' "${DEVICELIST_FILE}" | grep -Ei 'HmIP|WKP|KEYPAD|TAST' | head -n 40 || true
+              echo "--- Diagnose: HmIP/WKP-Kandidaten aus statelist.cgi (max. 40 Zeilen) ---"
+              grep -Ei '<device ' "${STATELIST_FILE}" | grep -Ei 'HmIP|WKP|KEYPAD|TAST' | head -n 40 || true
               CCU_REQUIRE_KEYPAD_MATCH_NORMALIZED="$(printf '%s' "${CCU_REQUIRE_KEYPAD_MATCH}" | tr '[:upper:]' '[:lower:]')"
               if [ "${CCU_REQUIRE_KEYPAD_MATCH_NORMALIZED}" = "true" ]; then
                 echo "KEYPAD_STATUS=FEHLER" >> "$GITHUB_ENV"
               fi
             else
-              echo "Gefundene Keypad-Geraete:"
-              printf '%s\n' "${KEYPAD_CANDIDATES}" | sed 's/^/  /'
+              echo "Gefundene Keypad-Basisadressen:"
+              printf '%s\n' "${KEYPAD_ADDRESSES}" | sed 's/^/  /'
 
-              KEYPAD_ADDRESSES="$(printf '%s\n' "${KEYPAD_CANDIDATES}" | sed -n 's/.* address="\([^"]*\)".*/\1/p' | sort -u)"
-              if [ -z "${KEYPAD_ADDRESSES}" ]; then
-                echo "::warning::Keypad-Kandidaten gefunden, aber keine Adressen extrahiert."
-                CCU_REQUIRE_KEYPAD_MATCH_NORMALIZED="$(printf '%s' "${CCU_REQUIRE_KEYPAD_MATCH}" | tr '[:upper:]' '[:lower:]')"
-                if [ "${CCU_REQUIRE_KEYPAD_MATCH_NORMALIZED}" = "true" ]; then
-                  echo "KEYPAD_STATUS=FEHLER" >> "$GITHUB_ENV"
-                fi
-              else
-                while IFS= read -r KEYPAD_ADDR; do
-                  [ -z "${KEYPAD_ADDR}" ] && continue
-                  echo
-                  echo "--- Keypad Device Block (Address: ${KEYPAD_ADDR}) ---"
-                  awk -v addr="${KEYPAD_ADDR}" '
-                    $0 ~ "<device " && $0 ~ ("address=\"" addr "\"") {in_dev=1}
-                    in_dev {print}
-                    in_dev && $0 ~ "</device>" {in_dev=0}
-                  ' "${STATELIST_FILE}" | grep -E '<device |<channel |<datapoint ' || true
-                done <<< "${KEYPAD_ADDRESSES}"
-                echo "KEYPAD_STATUS=OK" >> "$GITHUB_ENV"
-              fi
+              while IFS= read -r KEYPAD_ADDR; do
+                [ -z "${KEYPAD_ADDR}" ] && continue
+
+                echo
+                echo "--- Keypad-Einstellungen (devicelist, Basisadresse: ${KEYPAD_ADDR}) ---"
+                awk -v addr="${KEYPAD_ADDR}" '
+                  $0 ~ "<device " && $0 ~ ("address=\"" addr "\"") {in_dev=1}
+                  in_dev {print}
+                  in_dev && $0 ~ "</device>" {in_dev=0}
+                ' "${DEVICELIST_FILE}" || true
+
+                echo
+                echo "--- Keypad-Status (statelist, Basisadresse: ${KEYPAD_ADDR}) ---"
+                awk -v addr="${KEYPAD_ADDR}" '
+                  $0 ~ "<device " && $0 ~ ("address=\"" addr "\"") {in_dev=1}
+                  in_dev {print}
+                  in_dev && $0 ~ "</device>" {in_dev=0}
+                ' "${STATELIST_FILE}" | grep -E '<device |<channel |<datapoint ' || true
+              done <<< "${KEYPAD_ADDRESSES}"
+
+              echo "KEYPAD_STATUS=OK" >> "$GITHUB_ENV"
             fi
           else
             echo "::warning::Keypad-Auswertung uebersprungen, da devicelist/statelist nicht abrufbar war."
