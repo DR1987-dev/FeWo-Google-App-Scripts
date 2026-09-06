@@ -35,6 +35,8 @@ jobs:
       CCU_REQUIRE_HMIP_PORT: ${{ vars.CCU_REQUIRE_HMIP_PORT || 'false' }}
       # XML-API Endpoint auf der CCU3 (Add-on).
       CCU_XMLAPI_PATH: ${{ vars.CCU_XMLAPI_PATH || '/addons/xmlapi/statelist.cgi' }}
+      # Regex fuer die Erkennung von Keypad-Geraeten ueber Name/Typ.
+      CCU_KEYPAD_MATCH_REGEX: ${{ vars.CCU_KEYPAD_MATCH_REGEX || 'WKP|KEYPAD|KeyPad|TASTATUR' }}
 
     steps:
       - name: Install WireGuard and tools
@@ -70,6 +72,7 @@ jobs:
           check_var "CCU_HMIP_PORT"             "${CCU_HMIP_PORT}"           "GitHub Variable"
           check_var "CCU_REQUIRE_HMIP_PORT"     "${CCU_REQUIRE_HMIP_PORT}"   "GitHub Variable"
           check_var "CCU_XMLAPI_PATH"           "${CCU_XMLAPI_PATH}"         "GitHub Variable"
+          check_var "CCU_KEYPAD_MATCH_REGEX"    "${CCU_KEYPAD_MATCH_REGEX}"  "GitHub Variable"
           check_var "WIREGUARD_PRIVATE_KEY"     "${WG_PRIVATE_KEY}"          "GitHub Secret"
           check_var "WIREGUARD_PEER_PUBLIC_KEY" "${WG_PEER_PUBLIC_KEY}"      "GitHub Variable"
           if [ "${ERRORS}" -gt 0 ]; then
@@ -455,6 +458,7 @@ jobs:
           echo "HTTP_STATUS=FEHLER" >> "$GITHUB_ENV"
           echo "HMIP_STATUS=FEHLER" >> "$GITHUB_ENV"
           echo "XMLAPI_STATUS=FEHLER" >> "$GITHUB_ENV"
+          echo "KEYPAD_STATUS=FEHLER" >> "$GITHUB_ENV"
           echo "VPN_STATUS=FEHLER" >> "$GITHUB_ENV"
 
           if ip link show "${WG_INTERFACE}" >/dev/null 2>&1; then
@@ -561,6 +565,54 @@ jobs:
           fi
           rm -f "${XMLAPI_BODY_FILE}"
 
+          echo
+          echo "=== Keypad-Auswertung ueber XML-API ==="
+          DEVICELIST_URL="http://${CCU_IP}/addons/xmlapi/devicelist.cgi"
+          STATELIST_URL="http://${CCU_IP}/addons/xmlapi/statelist.cgi"
+          DEVICELIST_FILE_RAW="/tmp/ccu-devicelist.xml"
+          STATELIST_FILE_RAW="/tmp/ccu-statelist.xml"
+          DEVICELIST_FILE="/tmp/ccu-devicelist.pretty.xml"
+          STATELIST_FILE="/tmp/ccu-statelist.pretty.xml"
+
+          DEVICELIST_HTTP_CODE="$(curl --connect-timeout 10 --max-time 20 -sS "${XMLAPI_AUTH_ARGS[@]}" -o "${DEVICELIST_FILE_RAW}" -w "%{http_code}" "${DEVICELIST_URL}" 2>/dev/null || true)"
+          STATELIST_HTTP_CODE="$(curl --connect-timeout 10 --max-time 20 -sS "${XMLAPI_AUTH_ARGS[@]}" -o "${STATELIST_FILE_RAW}" -w "%{http_code}" "${STATELIST_URL}" 2>/dev/null || true)"
+
+          echo "devicelist.cgi HTTP-Status: ${DEVICELIST_HTTP_CODE:-keine Antwort}"
+          echo "statelist.cgi HTTP-Status: ${STATELIST_HTTP_CODE:-keine Antwort}"
+
+          if [ "${DEVICELIST_HTTP_CODE}" = "200" ] && [ "${STATELIST_HTTP_CODE}" = "200" ]; then
+            sed 's/></>\n</g' "${DEVICELIST_FILE_RAW}" > "${DEVICELIST_FILE}"
+            sed 's/></>\n</g' "${STATELIST_FILE_RAW}" > "${STATELIST_FILE}"
+
+            KEYPAD_CANDIDATES="$(grep -Ei '<device ' "${DEVICELIST_FILE}" | grep -Ei "${CCU_KEYPAD_MATCH_REGEX}" || true)"
+            if [ -z "${KEYPAD_CANDIDATES}" ]; then
+              echo "::warning::Keine Keypad-Geraete gefunden. Regex: ${CCU_KEYPAD_MATCH_REGEX}"
+            else
+              echo "Gefundene Keypad-Geraete:"
+              printf '%s\n' "${KEYPAD_CANDIDATES}" | sed 's/^/  /'
+
+              KEYPAD_ADDRESSES="$(printf '%s\n' "${KEYPAD_CANDIDATES}" | sed -n 's/.* address="\([^"]*\)".*/\1/p' | sort -u)"
+              if [ -z "${KEYPAD_ADDRESSES}" ]; then
+                echo "::warning::Keypad-Kandidaten gefunden, aber keine Adressen extrahiert."
+              else
+                while IFS= read -r KEYPAD_ADDR; do
+                  [ -z "${KEYPAD_ADDR}" ] && continue
+                  echo
+                  echo "--- Keypad Device Block (Address: ${KEYPAD_ADDR}) ---"
+                  awk -v addr="${KEYPAD_ADDR}" '
+                    $0 ~ "<device " && $0 ~ ("address=\"" addr "\"") {in_dev=1}
+                    in_dev {print}
+                    in_dev && $0 ~ "</device>" {in_dev=0}
+                  ' "${STATELIST_FILE}" | grep -E '<device |<channel |<datapoint ' || true
+                done <<< "${KEYPAD_ADDRESSES}"
+                echo "KEYPAD_STATUS=OK" >> "$GITHUB_ENV"
+              fi
+            fi
+          else
+            echo "::warning::Keypad-Auswertung uebersprungen, da devicelist/statelist nicht abrufbar war."
+          fi
+          rm -f "${DEVICELIST_FILE_RAW}" "${STATELIST_FILE_RAW}" "${DEVICELIST_FILE}" "${STATELIST_FILE}"
+
           if [ "${TCP_80}" != "true" ] && [ "${TCP_443}" != "true" ]; then
             echo
             echo "::warning::Kein TCP-Port 80/443 auf der CCU3 erreichbar."
@@ -580,6 +632,7 @@ jobs:
           HTTP="${HTTP_STATUS:-FEHLER}"
           HMIP="${HMIP_STATUS:-FEHLER}"
           XMLAPI="${XMLAPI_STATUS:-FEHLER}"
+          KEYPAD="${KEYPAD_STATUS:-FEHLER}"
           HANDSHAKE="${HANDSHAKE_STATUS:-FEHLER}"
           HANDSHAKE_DIAG_CODE="${HANDSHAKE_ROOT_CAUSE_CODE:-F}"
           HANDSHAKE_DIAG_DETAILS="${HANDSHAKE_ROOT_CAUSE_DETAILS:-Keine eindeutige Ursache ermittelt.}"
@@ -594,6 +647,7 @@ jobs:
           echo "  HTTP-Verbindung CCU3:   ${HTTP}"
           echo "  HmIP-Port ${CCU_HMIP_PORT}:     ${HMIP}"
           echo "  XML-API (${CCU_XMLAPI_PATH}):  ${XMLAPI}"
+          echo "  Keypad-Daten (XML-API): ${KEYPAD}"
           echo "============================================"
 
           # WireGuard konnte nicht gestartet werden
