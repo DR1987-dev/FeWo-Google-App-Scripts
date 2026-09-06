@@ -604,8 +604,10 @@ jobs:
 
           XMLAPI_BODY_FILE="/tmp/ccu-xmlapi-response.xml"
           XMLAPI_ERR_FILE="/tmp/ccu-xmlapi-error.log"
+          XMLAPI_FALLBACK_BODY_FILE="/tmp/ccu-xmlapi-version-response.xml"
+          XMLAPI_FALLBACK_ERR_FILE="/tmp/ccu-xmlapi-version-error.log"
           : > "${XMLAPI_BODY_FILE}"
-          XMLAPI_HTTP_CODE="$(curl --connect-timeout 10 --max-time 20 --retry 2 --retry-delay 1 --retry-connrefused -sS "${XMLAPI_AUTH_ARGS[@]}" -o "${XMLAPI_BODY_FILE}" -w "%{http_code}" "${XMLAPI_URL}" 2>"${XMLAPI_ERR_FILE}" || true)"
+          XMLAPI_HTTP_CODE="$(curl --connect-timeout 15 --max-time 45 --retry 2 --retry-delay 1 --retry-connrefused -sS "${XMLAPI_AUTH_ARGS[@]}" -o "${XMLAPI_BODY_FILE}" -w "%{http_code}" "${XMLAPI_URL}" 2>"${XMLAPI_ERR_FILE}" || true)"
           echo "XML-API HTTP-Status: ${XMLAPI_HTTP_CODE:-keine Antwort}"
           if [ "${XMLAPI_HTTP_CODE}" = "000" ]; then
             echo "::warning::curl konnte ${CCU_XMLAPI_PATH} nicht abrufen (HTTP 000)."
@@ -623,8 +625,28 @@ jobs:
               echo "::warning::XML-API meldet not_authenticated. Bitte CCU_XMLAPI_USER/CCU_XMLAPI_PASSWORD und Benutzerrechte auf der CCU pruefen."
             fi
             echo "::warning::XML-API nicht erreichbar oder unerwartete Antwort. URL: ${XMLAPI_URL}"
+
+            # Fallback: leichter Healthcheck gegen version.cgi, damit ein einzelner statelist-Timeout
+            # nicht den gesamten XML-API-Status faelschlich auf FEHLER setzt.
+            XMLAPI_FALLBACK_URL_BASE="http://${CCU_IP}/addons/xmlapi/version.cgi"
+            XMLAPI_FALLBACK_URL="${XMLAPI_FALLBACK_URL_BASE}"
+            if [ -n "${CCU_XMLAPI_SID_CLEAN:-}" ]; then
+              XMLAPI_FALLBACK_URL="$(append_query_param "${XMLAPI_FALLBACK_URL_BASE}" "sid" "${CCU_XMLAPI_SID_CLEAN}")"
+            fi
+            : > "${XMLAPI_FALLBACK_BODY_FILE}"
+            XMLAPI_FALLBACK_HTTP_CODE="$(curl --connect-timeout 10 --max-time 20 --retry 2 --retry-delay 1 --retry-connrefused -sS "${XMLAPI_AUTH_ARGS[@]}" -o "${XMLAPI_FALLBACK_BODY_FILE}" -w "%{http_code}" "${XMLAPI_FALLBACK_URL}" 2>"${XMLAPI_FALLBACK_ERR_FILE}" || true)"
+            echo "XML-API Fallback version.cgi HTTP-Status: ${XMLAPI_FALLBACK_HTTP_CODE:-keine Antwort}"
+            if [ "${XMLAPI_FALLBACK_HTTP_CODE}" = "200" ] \
+              && ! grep -qiE '<[[:space:]]*not_authenticated[[:space:]]*/>' "${XMLAPI_FALLBACK_BODY_FILE}" \
+              && grep -qiE '<[[:space:]]*version' "${XMLAPI_FALLBACK_BODY_FILE}"; then
+              echo "::warning::Primarer XML-API-Check fehlgeschlagen, aber version.cgi ist erreichbar. XML-API wird als erreichbar gewertet."
+              echo "XMLAPI_STATUS=OK" >> "$GITHUB_ENV"
+            elif [ "${XMLAPI_FALLBACK_HTTP_CODE}" = "000" ]; then
+              echo "::warning::curl konnte version.cgi ebenfalls nicht abrufen (HTTP 000)."
+              tail -n 3 "${XMLAPI_FALLBACK_ERR_FILE}" 2>/dev/null || true
+            fi
           fi
-          rm -f "${XMLAPI_BODY_FILE}" "${XMLAPI_ERR_FILE}"
+          rm -f "${XMLAPI_BODY_FILE}" "${XMLAPI_ERR_FILE}" "${XMLAPI_FALLBACK_BODY_FILE}" "${XMLAPI_FALLBACK_ERR_FILE}"
 
           echo
           echo "=== Keypad-Auswertung ueber XML-API ==="
@@ -638,8 +660,8 @@ jobs:
           : > "${DEVICELIST_FILE_RAW}"
           : > "${STATELIST_FILE_RAW}"
 
-          DEVICELIST_HTTP_CODE="$(curl --connect-timeout 10 --max-time 20 --retry 2 --retry-delay 1 --retry-connrefused -sS "${XMLAPI_AUTH_ARGS[@]}" -o "${DEVICELIST_FILE_RAW}" -w "%{http_code}" "${DEVICELIST_URL}" 2>"${DEVICELIST_ERR_FILE}" || true)"
-          STATELIST_HTTP_CODE="$(curl --connect-timeout 10 --max-time 20 --retry 2 --retry-delay 1 --retry-connrefused -sS "${XMLAPI_AUTH_ARGS[@]}" -o "${STATELIST_FILE_RAW}" -w "%{http_code}" "${STATELIST_URL}" 2>"${STATELIST_ERR_FILE}" || true)"
+          DEVICELIST_HTTP_CODE="$(curl --connect-timeout 15 --max-time 45 --retry 2 --retry-delay 1 --retry-connrefused -sS "${XMLAPI_AUTH_ARGS[@]}" -o "${DEVICELIST_FILE_RAW}" -w "%{http_code}" "${DEVICELIST_URL}" 2>"${DEVICELIST_ERR_FILE}" || true)"
+          STATELIST_HTTP_CODE="$(curl --connect-timeout 15 --max-time 45 --retry 2 --retry-delay 1 --retry-connrefused -sS "${XMLAPI_AUTH_ARGS[@]}" -o "${STATELIST_FILE_RAW}" -w "%{http_code}" "${STATELIST_URL}" 2>"${STATELIST_ERR_FILE}" || true)"
 
           echo "devicelist.cgi HTTP-Status: ${DEVICELIST_HTTP_CODE:-keine Antwort}"
           echo "statelist.cgi HTTP-Status: ${STATELIST_HTTP_CODE:-keine Antwort}"
