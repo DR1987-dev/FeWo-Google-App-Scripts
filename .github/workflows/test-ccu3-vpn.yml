@@ -35,6 +35,8 @@ jobs:
       CCU_REQUIRE_HMIP_PORT: ${{ vars.CCU_REQUIRE_HMIP_PORT || 'false' }}
       # XML-API Endpoint auf der CCU3 (Add-on).
       CCU_XMLAPI_PATH: ${{ vars.CCU_XMLAPI_PATH || '/addons/xmlapi/statelist.cgi' }}
+      # Optional: XML-API Security Token (sid). Wenn gesetzt, wird sid-basierte Authentifizierung verwendet.
+      CCU_XMLAPI_SID: ${{ secrets.CCU_XMLAPI_SID }}
       # Regex fuer die Erkennung von Keypad-Geraeten ueber Name/Typ.
       CCU_KEYPAD_MATCH_REGEX: ${{ vars.CCU_KEYPAD_MATCH_REGEX || 'WKP|KEYPAD|KeyPad|TASTATUR' }}
       # Optional: Serielle Basisadresse des Keypads (z. B. 002E9F29993E22) fuer Fallback-Matching.
@@ -465,6 +467,7 @@ jobs:
         env:
           CCU_XMLAPI_USER: ${{ secrets.CCU_XMLAPI_USER }}
           CCU_XMLAPI_PASSWORD: ${{ secrets.CCU_XMLAPI_PASSWORD }}
+          CCU_XMLAPI_SID: ${{ secrets.CCU_XMLAPI_SID }}
         run: |
           set +e
 
@@ -561,29 +564,60 @@ jobs:
 
           echo
           echo "=== CCU XML-API Test (${CCU_XMLAPI_PATH}) ==="
-          XMLAPI_URL="http://${CCU_IP}${CCU_XMLAPI_PATH}"
+
+          append_query_param() {
+            local url="$1"
+            local key="$2"
+            local value="$3"
+            if [ -z "${value}" ]; then
+              printf '%s' "${url}"
+            elif echo "${url}" | grep -q '?'; then
+              printf '%s&%s=%s' "${url}" "${key}" "${value}"
+            else
+              printf '%s?%s=%s' "${url}" "${key}" "${value}"
+            fi
+          }
+
+          XMLAPI_URL_BASE="http://${CCU_IP}${CCU_XMLAPI_PATH}"
+          DEVICELIST_URL_BASE="http://${CCU_IP}/addons/xmlapi/devicelist.cgi"
+          STATELIST_URL_BASE="http://${CCU_IP}/addons/xmlapi/statelist.cgi"
+
+          XMLAPI_URL="${XMLAPI_URL_BASE}"
+          DEVICELIST_URL="${DEVICELIST_URL_BASE}"
+          STATELIST_URL="${STATELIST_URL_BASE}"
           XMLAPI_AUTH_ARGS=()
-          if [ -n "${CCU_XMLAPI_USER}" ] && [ -n "${CCU_XMLAPI_PASSWORD}" ]; then
+          if [ -n "${CCU_XMLAPI_SID:-}" ]; then
+            XMLAPI_URL="$(append_query_param "${XMLAPI_URL_BASE}" "sid" "${CCU_XMLAPI_SID}")"
+            DEVICELIST_URL="$(append_query_param "${DEVICELIST_URL_BASE}" "sid" "${CCU_XMLAPI_SID}")"
+            STATELIST_URL="$(append_query_param "${STATELIST_URL_BASE}" "sid" "${CCU_XMLAPI_SID}")"
+            echo "XML-API Auth-Modus: SID-Token"
+          elif [ -n "${CCU_XMLAPI_USER}" ] && [ -n "${CCU_XMLAPI_PASSWORD}" ]; then
             XMLAPI_AUTH_ARGS=(-u "${CCU_XMLAPI_USER}:${CCU_XMLAPI_PASSWORD}")
+            echo "XML-API Auth-Modus: Basic Auth"
+          else
+            echo "::warning::Kein XML-API Token (CCU_XMLAPI_SID) und keine Basic-Auth-Credentials gesetzt."
           fi
 
           XMLAPI_BODY_FILE="/tmp/ccu-xmlapi-response.xml"
           XMLAPI_HTTP_CODE="$(curl --connect-timeout 10 --max-time 20 -sS "${XMLAPI_AUTH_ARGS[@]}" -o "${XMLAPI_BODY_FILE}" -w "%{http_code}" "${XMLAPI_URL}" 2>/dev/null || true)"
           echo "XML-API HTTP-Status: ${XMLAPI_HTTP_CODE:-keine Antwort}"
 
-          if [ "${XMLAPI_HTTP_CODE}" = "200" ] && grep -qiE '<[[:space:]]*(stateList|systemVariables|xml)' "${XMLAPI_BODY_FILE}"; then
+          if [ "${XMLAPI_HTTP_CODE}" = "200" ] \
+            && grep -qiE '<[[:space:]]*(stateList|systemVariables|xml)' "${XMLAPI_BODY_FILE}" \
+            && ! grep -qiE '<[[:space:]]*not_authenticated[[:space:]]*/>' "${XMLAPI_BODY_FILE}"; then
             echo "XML-API Antwort gueltig: JA"
             echo "XMLAPI_STATUS=OK" >> "$GITHUB_ENV"
           else
             echo "XML-API Antwort gueltig: NEIN"
+            if grep -qiE '<[[:space:]]*not_authenticated[[:space:]]*/>' "${XMLAPI_BODY_FILE}"; then
+              echo "::warning::XML-API meldet not_authenticated. Bitte CCU_XMLAPI_USER/CCU_XMLAPI_PASSWORD und Benutzerrechte auf der CCU pruefen."
+            fi
             echo "::warning::XML-API nicht erreichbar oder unerwartete Antwort. URL: ${XMLAPI_URL}"
           fi
           rm -f "${XMLAPI_BODY_FILE}"
 
           echo
           echo "=== Keypad-Auswertung ueber XML-API ==="
-          DEVICELIST_URL="http://${CCU_IP}/addons/xmlapi/devicelist.cgi"
-          STATELIST_URL="http://${CCU_IP}/addons/xmlapi/statelist.cgi"
           DEVICELIST_FILE_RAW="/tmp/ccu-devicelist.xml"
           STATELIST_FILE_RAW="/tmp/ccu-statelist.xml"
           DEVICELIST_FILE="/tmp/ccu-devicelist.pretty.xml"
