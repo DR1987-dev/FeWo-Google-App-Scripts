@@ -595,6 +595,11 @@ jobs:
           echo "devicelist.cgi HTTP-Status: ${DEVICELIST_HTTP_CODE:-keine Antwort}"
           echo "statelist.cgi HTTP-Status: ${STATELIST_HTTP_CODE:-keine Antwort}"
 
+          DEVICELIST_BYTES="$(wc -c < "${DEVICELIST_FILE_RAW}" 2>/dev/null || echo 0)"
+          STATELIST_BYTES="$(wc -c < "${STATELIST_FILE_RAW}" 2>/dev/null || echo 0)"
+          echo "devicelist.cgi Groesse: ${DEVICELIST_BYTES} Bytes"
+          echo "statelist.cgi Groesse: ${STATELIST_BYTES} Bytes"
+
           if [ "${DEVICELIST_HTTP_CODE}" = "200" ] && [ "${STATELIST_HTTP_CODE}" = "200" ]; then
             sed 's/></>\n</g' "${DEVICELIST_FILE_RAW}" > "${DEVICELIST_FILE}"
             sed 's/></>\n</g' "${STATELIST_FILE_RAW}" > "${STATELIST_FILE}"
@@ -635,6 +640,17 @@ jobs:
               echo "--- Diagnose: XML-Zaehler ---"
               echo "devicelist: devices=${DEV_DEVICE_COUNT} channels=${DEV_CHANNEL_COUNT}"
               echo "statelist:  devices=${STATE_DEVICE_COUNT} channels=${STATE_CHANNEL_COUNT}"
+
+              if [ "${DEV_DEVICE_COUNT}" = "0" ] && [ "${STATE_DEVICE_COUNT}" = "0" ]; then
+                echo "::warning::XML-API liefert keine <device>-Eintraege. Moegliche Ursache: fehlende WebUI-Rechte des XML-API-Users oder unerwartete Antwortstruktur."
+                if grep -qiE '<html|<form|login|anmeldung|auth' "${DEVICELIST_FILE_RAW}" || grep -qiE '<html|<form|login|anmeldung|auth' "${STATELIST_FILE_RAW}"; then
+                  echo "::warning::Antwort wirkt wie HTML/Login-Seite statt XML-Device-Liste. Bitte CCU_XMLAPI_USER/CCU_XMLAPI_PASSWORD und Benutzerrechte pruefen."
+                fi
+                echo "--- Diagnose: Rohauszug devicelist.cgi (erste 25 Zeilen) ---"
+                sed 's/></>\n</g' "${DEVICELIST_FILE_RAW}" | head -n 25 || true
+                echo "--- Diagnose: Rohauszug statelist.cgi (erste 25 Zeilen) ---"
+                sed 's/></>\n</g' "${STATELIST_FILE_RAW}" | head -n 25 || true
+              fi
 
               echo "--- Diagnose: Volltextsuche in devicelist (HmIP|WKP|KEYPAD|TAST|Serial, max. 80) ---"
               if [ -n "${CCU_KEYPAD_SERIAL}" ]; then
