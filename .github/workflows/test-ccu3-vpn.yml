@@ -31,6 +31,8 @@ jobs:
       WIREGUARD_REQUIRE_DYNDNS_ENDPOINT: ${{ vars.WIREGUARD_REQUIRE_DYNDNS_ENDPOINT || 'false' }}
       # Homematic IP XML-RPC Port auf der CCU3 (Standard: 2010).
       CCU_HMIP_PORT: ${{ vars.CCU_HMIP_PORT || '2010' }}
+      # Optional: true erzwingt, dass der HmIP-Port erreichbar sein muss.
+      CCU_REQUIRE_HMIP_PORT: ${{ vars.CCU_REQUIRE_HMIP_PORT || 'false' }}
       # XML-API Endpoint auf der CCU3 (Add-on).
       CCU_XMLAPI_PATH: ${{ vars.CCU_XMLAPI_PATH || '/addons/xmlapi/statelist.cgi' }}
 
@@ -66,6 +68,7 @@ jobs:
           check_var "WIREGUARD_ADDRESS"         "${WG_ADDRESS}"              "GitHub Variable"
           check_var "WIREGUARD_ENDPOINT"        "${WG_ENDPOINT}"             "GitHub Variable"
           check_var "CCU_HMIP_PORT"             "${CCU_HMIP_PORT}"           "GitHub Variable"
+          check_var "CCU_REQUIRE_HMIP_PORT"     "${CCU_REQUIRE_HMIP_PORT}"   "GitHub Variable"
           check_var "CCU_XMLAPI_PATH"           "${CCU_XMLAPI_PATH}"         "GitHub Variable"
           check_var "WIREGUARD_PRIVATE_KEY"     "${WG_PRIVATE_KEY}"          "GitHub Secret"
           check_var "WIREGUARD_PEER_PUBLIC_KEY" "${WG_PEER_PUBLIC_KEY}"      "GitHub Variable"
@@ -101,6 +104,11 @@ jobs:
             ERRORS=$((ERRORS + 1))
           elif [ "${CCU_HMIP_PORT}" -lt 1 ] || [ "${CCU_HMIP_PORT}" -gt 65535 ]; then
             echo "::error::CCU_HMIP_PORT liegt ausserhalb 1-65535."
+            ERRORS=$((ERRORS + 1))
+          fi
+          CCU_REQUIRE_HMIP_PORT_NORMALIZED="$(printf '%s' "${CCU_REQUIRE_HMIP_PORT}" | tr '[:upper:]' '[:lower:]')"
+          if [ "${CCU_REQUIRE_HMIP_PORT_NORMALIZED}" != "true" ] && [ "${CCU_REQUIRE_HMIP_PORT_NORMALIZED}" != "false" ]; then
+            echo "::error::CCU_REQUIRE_HMIP_PORT muss 'true' oder 'false' sein."
             ERRORS=$((ERRORS + 1))
           fi
           if [ "${CCU_XMLAPI_PATH#'/'}" = "${CCU_XMLAPI_PATH}" ]; then
@@ -529,6 +537,7 @@ jobs:
             echo "HMIP_STATUS=OK" >> "$GITHUB_ENV"
           else
             echo "Homematic IP Port ${CCU_HMIP_PORT}: NICHT ERREICHBAR"
+            echo "::warning::HmIP-Port ${CCU_HMIP_PORT} nicht erreichbar. XML-API kann trotzdem funktionieren."
           fi
 
           echo
@@ -595,8 +604,16 @@ jobs:
           fi
 
           # Fall A: Alles OK
-          if [ "${VPN}" = "OK" ] && [ "${HANDSHAKE}" = "OK" ] && [ "${ROUTE}" = "OK" ] && [ "${TCP}" = "OK" ] && [ "${HTTP}" = "OK" ] && [ "${HMIP}" = "OK" ] && [ "${XMLAPI}" = "OK" ]; then
-            echo "Ergebnis: A - WireGuard funktioniert und CCU3 inkl. Homematic IP erreichbar. Alles OK."
+          if [ "${VPN}" = "OK" ] && [ "${HANDSHAKE}" = "OK" ] && [ "${ROUTE}" = "OK" ] && [ "${TCP}" = "OK" ] && [ "${HTTP}" = "OK" ] && [ "${XMLAPI}" = "OK" ]; then
+            if [ "${HMIP}" != "OK" ]; then
+              CCU_REQUIRE_HMIP_PORT_NORMALIZED="$(printf '%s' "${CCU_REQUIRE_HMIP_PORT}" | tr '[:upper:]' '[:lower:]')"
+              if [ "${CCU_REQUIRE_HMIP_PORT_NORMALIZED}" = "true" ]; then
+                echo "Ergebnis: H - HmIP-Port ${CCU_HMIP_PORT} ist erforderlich, aber nicht erreichbar."
+                exit 1
+              fi
+              echo "::warning::HmIP-Port ${CCU_HMIP_PORT} nicht erreichbar, wird aber nicht erzwungen (CCU_REQUIRE_HMIP_PORT=false)."
+            fi
+            echo "Ergebnis: A - WireGuard funktioniert und CCU3 inkl. XML-API erreichbar. Alles OK."
             exit 0
           fi
 
@@ -641,12 +658,16 @@ jobs:
           fi
 
           if [ "${HMIP}" != "OK" ]; then
-            echo "Ergebnis: H - WireGuard Handshake OK, aber HmIP-Port ${CCU_HMIP_PORT} auf der CCU3 nicht erreichbar."
-            echo "Pruefen:"
-            echo "  - HmIP-Serverdienst auf der CCU3 aktiv"
-            echo "  - Lokale Firewall/Filter auf der CCU3"
-            echo "  - Richtiger Port (Standard 2010)"
-            exit 1
+            CCU_REQUIRE_HMIP_PORT_NORMALIZED="$(printf '%s' "${CCU_REQUIRE_HMIP_PORT}" | tr '[:upper:]' '[:lower:]')"
+            if [ "${CCU_REQUIRE_HMIP_PORT_NORMALIZED}" = "true" ]; then
+              echo "Ergebnis: H - WireGuard Handshake OK, aber HmIP-Port ${CCU_HMIP_PORT} auf der CCU3 nicht erreichbar."
+              echo "Pruefen:"
+              echo "  - HmIP-Serverdienst auf der CCU3 aktiv"
+              echo "  - Lokale Firewall/Filter auf der CCU3"
+              echo "  - Richtiger Port (Standard 2010)"
+              exit 1
+            fi
+            echo "::warning::HmIP-Port ${CCU_HMIP_PORT} nicht erreichbar, aber nicht als Fehler gewertet."
           fi
 
           if [ "${XMLAPI}" != "OK" ]; then
