@@ -803,9 +803,18 @@ jobs:
                 while IFS= read -r KEYPAD_ADDR; do
                   [ -z "${KEYPAD_ADDR}" ] && continue
                   TARGET_CHANNEL_ADDR="${KEYPAD_ADDR}:${CCU_KEYPAD_UPDATE_CHANNEL}"
+                  # 1) Primär: exakte Kanaladresse (eindeutig)
                   CHANNEL_LINE="$(LC_ALL=C grep -aEi '<channel ' "${DEVICELIST_FILE}" \
-                    | grep -aEi "address=['\"]${TARGET_CHANNEL_ADDR}['\"]|index=['\"]${CCU_KEYPAD_UPDATE_CHANNEL}['\"]" \
+                    | grep -aEi "address=['\"]${TARGET_CHANNEL_ADDR}['\"]" \
                     | head -n 1 || true)"
+                  # 2) Fallback: index nur innerhalb des richtigen Device-Blocks
+                  if [ -z "${CHANNEL_LINE}" ]; then
+                    CHANNEL_LINE="$(LC_ALL=C awk -v dev_addr="${KEYPAD_ADDR}" -v idx="${CCU_KEYPAD_UPDATE_CHANNEL}" '
+                      $0 ~ "<device " && (index($0, "address=\"" dev_addr "\"") || index($0, "address='" dev_addr "'")) {in_dev=1}
+                      in_dev && $0 ~ "<channel " && (index($0, "index=\"" idx "\"") || index($0, "index='" idx "'")) {print; exit}
+                      in_dev && $0 ~ "</device>" {in_dev=0}
+                    ' "${DEVICELIST_FILE}" || true)"
+                  fi
                   CHANNEL_ISE_ID="$(printf '%s' "${CHANNEL_LINE}" | sed -n "s/.* ise_id=['\"]\([0-9][0-9]*\)['\"].*/\1/p")"
 
                   if [ -z "${CHANNEL_ISE_ID}" ]; then
@@ -815,6 +824,7 @@ jobs:
                     UPDATE_FAIL_COUNT=$((UPDATE_FAIL_COUNT + 1))
                     continue
                   fi
+                  echo "Info: Zielkanal ${TARGET_CHANNEL_ADDR} aufgeloeste Kanal-ise_id: ${CHANNEL_ISE_ID}"
 
                   TARGET_DP_LINE="$(LC_ALL=C grep -aEi '<datapoint ' "${STATELIST_FILE}" \
                     | grep -aEi "parent=['\"]${CHANNEL_ISE_ID}['\"]|parent_channel=['\"]${CHANNEL_ISE_ID}['\"]|channel=['\"]${CHANNEL_ISE_ID}['\"]" \
