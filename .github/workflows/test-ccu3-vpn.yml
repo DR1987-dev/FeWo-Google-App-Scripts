@@ -49,6 +49,8 @@ jobs:
       CCU_KEYPAD_UPDATE_CHANNEL: ${{ vars.CCU_KEYPAD_UPDATE_CHANNEL || '5' }}
       # Neuer Zugangscode fuer den Zielkanal (als Secret hinterlegen).
       CCU_KEYPAD_NEW_CODE: ${{ secrets.CCU_KEYPAD_NEW_CODE }}
+      # Master-Parametername fuer den Zugangscode (HmIP-WKP: NUMERIC_PIN_CODE).
+      CCU_KEYPAD_MASTER_NAME: ${{ vars.CCU_KEYPAD_MASTER_NAME || 'NUMERIC_PIN_CODE' }}
 
     steps:
       - name: Install WireGuard and tools
@@ -155,6 +157,10 @@ jobs:
               ERRORS=$((ERRORS + 1))
             elif ! printf '%s' "${CCU_KEYPAD_NEW_CODE}" | grep -Eq '^[0-9]{4,10}$'; then
               echo "::error::CCU_KEYPAD_NEW_CODE muss 4-10 Ziffern enthalten."
+              ERRORS=$((ERRORS + 1))
+            fi
+            if [ -z "${CCU_KEYPAD_MASTER_NAME}" ]; then
+              echo "::error::CCU_KEYPAD_MASTER_NAME darf nicht leer sein (z. B. NUMERIC_PIN_CODE)."
               ERRORS=$((ERRORS + 1))
             fi
           fi
@@ -865,7 +871,7 @@ jobs:
                   fi
 
                   if [ "${UPDATE_DONE}" != "true" ]; then
-                    echo "Info: Suche Master-Parameter fuer ${TARGET_CHANNEL_ADDR} (Kanal-ise_id ${CHANNEL_ISE_ID})..."
+                    echo "Info: Setze Master-Parameter '${CCU_KEYPAD_MASTER_NAME}' fuer ${TARGET_CHANNEL_ADDR} (Kanal-ise_id ${CHANNEL_ISE_ID})..."
                     MASTERVALUE_URL_BASE="http://${CCU_IP}/addons/xmlapi/mastervalue.cgi"
                     MASTERVALUE_XML_FILE="/tmp/ccu-keypad-mastervalue-${CHANNEL_ISE_ID}.xml"
                     MASTERVALUE_ERR_FILE="/tmp/ccu-keypad-mastervalue-${CHANNEL_ISE_ID}.log"
@@ -878,7 +884,10 @@ jobs:
                         printf '%s\n' "${MASTER_NAMES}" | sed 's/^/  - /'
                       fi
 
-                      TARGET_MASTER_NAME="$(printf '%s\n' "${MASTER_NAMES}" | grep -Ei 'ACCESS|PIN|CODE|AUTH|KEY' | head -n 1 || true)"
+                      TARGET_MASTER_NAME="${CCU_KEYPAD_MASTER_NAME}"
+                      if [ -n "${MASTER_NAMES}" ] && ! printf '%s\n' "${MASTER_NAMES}" | grep -Fxq "${TARGET_MASTER_NAME}"; then
+                        echo "::warning::Master-Parameter ${TARGET_MASTER_NAME} wurde in mastervalue.cgi nicht gelistet; versuche Update trotzdem direkt."
+                      fi
                       if [ -n "${TARGET_MASTER_NAME}" ]; then
                         MASTERVALUECHANGE_URL_BASE="http://${CCU_IP}/addons/xmlapi/mastervaluechange.cgi"
                         MASTERVALUECHANGE_RESP_FILE="/tmp/ccu-keypad-mastervaluechange-${CHANNEL_ISE_ID}.xml"
@@ -895,7 +904,7 @@ jobs:
                         fi
                         rm -f "${MASTERVALUECHANGE_RESP_FILE}" "${MASTERVALUECHANGE_ERR_FILE}"
                       else
-                        echo "::warning::Kein passender Master-Parameter fuer Code im Kanal ${TARGET_CHANNEL_ADDR} gefunden."
+                        echo "::warning::Kein Master-Parametername fuer Code gesetzt (CCU_KEYPAD_MASTER_NAME leer)."
                       fi
                     else
                       echo "::warning::mastervalue.cgi fuer Kanal ${TARGET_CHANNEL_ADDR} nicht abrufbar (HTTP ${MASTERVALUE_HTTP_CODE:-000})."
