@@ -615,10 +615,16 @@ jobs:
           XMLAPI_URL_BASE="http://${CCU_IP}${CCU_XMLAPI_PATH}"
           DEVICELIST_URL_BASE="http://${CCU_IP}/addons/xmlapi/devicelist.cgi"
           STATELIST_URL_BASE="http://${CCU_IP}/addons/xmlapi/statelist.cgi"
+          STATECHANGE_URL_BASE="http://${CCU_IP}/addons/xmlapi/statechange.cgi"
+          MASTERVALUE_URL_BASE="http://${CCU_IP}/addons/xmlapi/mastervalue.cgi"
+          MASTERVALUECHANGE_URL_BASE="http://${CCU_IP}/addons/xmlapi/mastervaluechange.cgi"
 
           XMLAPI_URL="${XMLAPI_URL_BASE}"
           DEVICELIST_URL="${DEVICELIST_URL_BASE}"
           STATELIST_URL="${STATELIST_URL_BASE}"
+          STATECHANGE_URL="${STATECHANGE_URL_BASE}"
+          MASTERVALUE_URL="${MASTERVALUE_URL_BASE}"
+          MASTERVALUECHANGE_URL="${MASTERVALUECHANGE_URL_BASE}"
           XMLAPI_AUTH_ARGS=()
           CCU_XMLAPI_SID_CLEAN="$(printf '%s' "${CCU_XMLAPI_SID:-}" | tr -d '\r\n[:space:]')"
           if [ -n "${CCU_XMLAPI_SID_CLEAN}" ]; then
@@ -628,6 +634,9 @@ jobs:
             XMLAPI_URL="$(append_query_param "${XMLAPI_URL_BASE}" "sid" "${CCU_XMLAPI_SID_CLEAN}")"
             DEVICELIST_URL="$(append_query_param "${DEVICELIST_URL_BASE}" "sid" "${CCU_XMLAPI_SID_CLEAN}")"
             STATELIST_URL="$(append_query_param "${STATELIST_URL_BASE}" "sid" "${CCU_XMLAPI_SID_CLEAN}")"
+            STATECHANGE_URL="$(append_query_param "${STATECHANGE_URL_BASE}" "sid" "${CCU_XMLAPI_SID_CLEAN}")"
+            MASTERVALUE_URL="$(append_query_param "${MASTERVALUE_URL_BASE}" "sid" "${CCU_XMLAPI_SID_CLEAN}")"
+            MASTERVALUECHANGE_URL="$(append_query_param "${MASTERVALUECHANGE_URL_BASE}" "sid" "${CCU_XMLAPI_SID_CLEAN}")"
             echo "XML-API Auth-Modus: SID-Token"
           elif [ -n "${CCU_XMLAPI_USER}" ] && [ -n "${CCU_XMLAPI_PASSWORD}" ]; then
             XMLAPI_AUTH_ARGS=(-u "${CCU_XMLAPI_USER}:${CCU_XMLAPI_PASSWORD}")
@@ -854,10 +863,9 @@ jobs:
 
                   UPDATE_DONE="false"
                   if [ -n "${TARGET_DP_ID}" ]; then
-                    UPDATE_URL_BASE="http://${CCU_IP}/addons/xmlapi/statechange.cgi"
                     UPDATE_RESP_FILE="/tmp/ccu-keypad-update-${TARGET_DP_ID}.xml"
                     UPDATE_ERR_FILE="/tmp/ccu-keypad-update-${TARGET_DP_ID}.log"
-                    UPDATE_HTTP_CODE="$(curl --connect-timeout 10 --max-time 30 --retry 1 --retry-delay 1 --retry-connrefused -sS "${XMLAPI_AUTH_ARGS[@]}" --get --data-urlencode "ise_id=${TARGET_DP_ID}" --data-urlencode "new_value=${CCU_KEYPAD_NEW_CODE}" -o "${UPDATE_RESP_FILE}" -w "%{http_code}" "${UPDATE_URL_BASE}" 2>"${UPDATE_ERR_FILE}" || true)"
+                    UPDATE_HTTP_CODE="$(curl --connect-timeout 10 --max-time 30 --retry 1 --retry-delay 1 --retry-connrefused -sS "${XMLAPI_AUTH_ARGS[@]}" --get --data-urlencode "ise_id=${TARGET_DP_ID}" --data-urlencode "new_value=${CCU_KEYPAD_NEW_CODE}" -o "${UPDATE_RESP_FILE}" -w "%{http_code}" "${STATECHANGE_URL}" 2>"${UPDATE_ERR_FILE}" || true)"
 
                     if [ "${UPDATE_HTTP_CODE}" = "200" ]; then
                       echo "Code-Update erfolgreich fuer ${TARGET_CHANNEL_ADDR} (Datapoint: ${TARGET_DP_TYPE:-unbekannt}, ID: ${TARGET_DP_ID})."
@@ -872,10 +880,9 @@ jobs:
 
                   if [ "${UPDATE_DONE}" != "true" ]; then
                     echo "Info: Setze Master-Parameter '${CCU_KEYPAD_MASTER_NAME}' fuer ${TARGET_CHANNEL_ADDR} (Kanal-ise_id ${CHANNEL_ISE_ID})..."
-                    MASTERVALUE_URL_BASE="http://${CCU_IP}/addons/xmlapi/mastervalue.cgi"
                     MASTERVALUE_XML_FILE="/tmp/ccu-keypad-mastervalue-${CHANNEL_ISE_ID}.xml"
                     MASTERVALUE_ERR_FILE="/tmp/ccu-keypad-mastervalue-${CHANNEL_ISE_ID}.log"
-                    MASTERVALUE_HTTP_CODE="$(curl --connect-timeout 10 --max-time 30 --retry 1 --retry-delay 1 --retry-connrefused -sS "${XMLAPI_AUTH_ARGS[@]}" --get --data-urlencode "device_id=${CHANNEL_ISE_ID}" -o "${MASTERVALUE_XML_FILE}" -w "%{http_code}" "${MASTERVALUE_URL_BASE}" 2>"${MASTERVALUE_ERR_FILE}" || true)"
+                    MASTERVALUE_HTTP_CODE="$(curl --connect-timeout 10 --max-time 30 --retry 1 --retry-delay 1 --retry-connrefused -sS "${XMLAPI_AUTH_ARGS[@]}" --get --data-urlencode "device_id=${CHANNEL_ISE_ID}" -o "${MASTERVALUE_XML_FILE}" -w "%{http_code}" "${MASTERVALUE_URL}" 2>"${MASTERVALUE_ERR_FILE}" || true)"
 
                     if [ "${MASTERVALUE_HTTP_CODE}" = "200" ]; then
                       MASTER_NAMES="$(LC_ALL=C grep -aEo "name=['\"][^'\"]+['\"]" "${MASTERVALUE_XML_FILE}" | sed -E "s/name=['\"]([^'\"]+)['\"]/\1/" | sort -u)"
@@ -889,17 +896,15 @@ jobs:
                         echo "::warning::Master-Parameter ${TARGET_MASTER_NAME} wurde in mastervalue.cgi nicht gelistet; versuche Update trotzdem direkt."
                       fi
                       if [ -n "${TARGET_MASTER_NAME}" ]; then
-                        MASTERVALUECHANGE_URL_BASE="http://${CCU_IP}/addons/xmlapi/mastervaluechange.cgi"
                         MASTERVALUECHANGE_RESP_FILE="/tmp/ccu-keypad-mastervaluechange-${CHANNEL_ISE_ID}.xml"
                         MASTERVALUECHANGE_ERR_FILE="/tmp/ccu-keypad-mastervaluechange-${CHANNEL_ISE_ID}.log"
-                        MASTERVALUECHANGE_HTTP_CODE="$(curl --connect-timeout 10 --max-time 30 --retry 1 --retry-delay 1 --retry-connrefused -sS "${XMLAPI_AUTH_ARGS[@]}" --get --data-urlencode "device_id=${CHANNEL_ISE_ID}" --data-urlencode "name=${TARGET_MASTER_NAME}" --data-urlencode "value=${CCU_KEYPAD_NEW_CODE}" -o "${MASTERVALUECHANGE_RESP_FILE}" -w "%{http_code}" "${MASTERVALUECHANGE_URL_BASE}" 2>"${MASTERVALUECHANGE_ERR_FILE}" || true)"
+                        MASTERVALUECHANGE_HTTP_CODE="$(curl --connect-timeout 10 --max-time 30 --retry 1 --retry-delay 1 --retry-connrefused -sS "${XMLAPI_AUTH_ARGS[@]}" --get --data-urlencode "device_id=${CHANNEL_ISE_ID}" --data-urlencode "name=${TARGET_MASTER_NAME}" --data-urlencode "value=${CCU_KEYPAD_NEW_CODE}" -o "${MASTERVALUECHANGE_RESP_FILE}" -w "%{http_code}" "${MASTERVALUECHANGE_URL}" 2>"${MASTERVALUECHANGE_ERR_FILE}" || true)"
 
                         if [ "${MASTERVALUECHANGE_HTTP_CODE}" = "200" ]; then
                           # Erfolg nur dann melden, wenn der neue Wert danach auch lesbar ist.
-                          MASTER_VERIFY_URL_BASE="http://${CCU_IP}/addons/xmlapi/mastervalue.cgi"
                           MASTER_VERIFY_FILE="/tmp/ccu-keypad-mastervalue-verify-${CHANNEL_ISE_ID}.xml"
                           MASTER_VERIFY_ERR_FILE="/tmp/ccu-keypad-mastervalue-verify-${CHANNEL_ISE_ID}.log"
-                          MASTER_VERIFY_HTTP_CODE="$(curl --connect-timeout 10 --max-time 30 --retry 1 --retry-delay 1 --retry-connrefused -sS "${XMLAPI_AUTH_ARGS[@]}" --get --data-urlencode "device_id=${CHANNEL_ISE_ID}" --data-urlencode "requested_names=${TARGET_MASTER_NAME}" -o "${MASTER_VERIFY_FILE}" -w "%{http_code}" "${MASTER_VERIFY_URL_BASE}" 2>"${MASTER_VERIFY_ERR_FILE}" || true)"
+                          MASTER_VERIFY_HTTP_CODE="$(curl --connect-timeout 10 --max-time 30 --retry 1 --retry-delay 1 --retry-connrefused -sS "${XMLAPI_AUTH_ARGS[@]}" --get --data-urlencode "device_id=${CHANNEL_ISE_ID}" --data-urlencode "requested_names=${TARGET_MASTER_NAME}" -o "${MASTER_VERIFY_FILE}" -w "%{http_code}" "${MASTERVALUE_URL}" 2>"${MASTER_VERIFY_ERR_FILE}" || true)"
                           MASTER_VERIFY_PRETTY_FILE="${MASTER_VERIFY_FILE}.pretty"
                           sed 's/></>\n</g' "${MASTER_VERIFY_FILE}" > "${MASTER_VERIFY_PRETTY_FILE}" 2>/dev/null || cp "${MASTER_VERIFY_FILE}" "${MASTER_VERIFY_PRETTY_FILE}"
                           MASTER_VERIFY_MATCH="$(LC_ALL=C awk -v pname="${TARGET_MASTER_NAME}" -v pval="${CCU_KEYPAD_NEW_CODE}" '
