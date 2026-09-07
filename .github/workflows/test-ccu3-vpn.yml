@@ -683,19 +683,19 @@ jobs:
             sed 's/></>\n</g' "${DEVICELIST_FILE_RAW}" > "${DEVICELIST_FILE}"
             sed 's/></>\n</g' "${STATELIST_FILE_RAW}" > "${STATELIST_FILE}"
 
-            KEYPAD_HINT_LINES_DEV="$(grep -Ei '<device |<channel ' "${DEVICELIST_FILE}" | grep -Ei "${CCU_KEYPAD_MATCH_REGEX}" || true)"
-            KEYPAD_HINT_LINES_STATE="$(grep -Ei '<device |<channel ' "${STATELIST_FILE}" | grep -Ei "${CCU_KEYPAD_MATCH_REGEX}" || true)"
+            KEYPAD_HINT_LINES_DEV="$(grep -aEi '<device |<channel ' "${DEVICELIST_FILE}" | grep -aEi "${CCU_KEYPAD_MATCH_REGEX}" || true)"
+            KEYPAD_HINT_LINES_STATE="$(grep -aEi '<device |<channel ' "${STATELIST_FILE}" | grep -aEi "${CCU_KEYPAD_MATCH_REGEX}" || true)"
 
             if [ -n "${CCU_KEYPAD_SERIAL}" ]; then
-              SERIAL_HINT_LINES_DEV="$(grep -Ei '<device |<channel ' "${DEVICELIST_FILE}" | grep -Ei "address=\"${CCU_KEYPAD_SERIAL}(:[0-9]+)?\"|serial=\"${CCU_KEYPAD_SERIAL}\"" || true)"
-              SERIAL_HINT_LINES_STATE="$(grep -Ei '<device |<channel ' "${STATELIST_FILE}" | grep -Ei "address=\"${CCU_KEYPAD_SERIAL}(:[0-9]+)?\"|serial=\"${CCU_KEYPAD_SERIAL}\"" || true)"
+              SERIAL_HINT_LINES_DEV="$(grep -aEi '<device |<channel ' "${DEVICELIST_FILE}" | grep -aEi "address=['\"]${CCU_KEYPAD_SERIAL}(:[0-9]+)?['\"]|serial=['\"]${CCU_KEYPAD_SERIAL}['\"]" || true)"
+              SERIAL_HINT_LINES_STATE="$(grep -aEi '<device |<channel ' "${STATELIST_FILE}" | grep -aEi "address=['\"]${CCU_KEYPAD_SERIAL}(:[0-9]+)?['\"]|serial=['\"]${CCU_KEYPAD_SERIAL}['\"]" || true)"
               KEYPAD_HINT_LINES_DEV="$(printf '%s\n%s\n' "${KEYPAD_HINT_LINES_DEV}" "${SERIAL_HINT_LINES_DEV}" | sed '/^$/d' || true)"
               KEYPAD_HINT_LINES_STATE="$(printf '%s\n%s\n' "${KEYPAD_HINT_LINES_STATE}" "${SERIAL_HINT_LINES_STATE}" | sed '/^$/d' || true)"
             fi
 
             KEYPAD_ADDRESSES="$(
               printf '%s\n%s\n' "${KEYPAD_HINT_LINES_DEV}" "${KEYPAD_HINT_LINES_STATE}" \
-              | sed -n 's/.* address="\([^"]*\)".*/\1/p' \
+              | sed -n "s/.* address=['\"]\([^'\"]*\)['\"].*/\1/p" \
               | sed -E 's/:[0-9]+$//' \
               | sed '/^$/d' \
               | sort -u
@@ -712,17 +712,17 @@ jobs:
               if [ -n "${CCU_KEYPAD_SERIAL}" ]; then
                 echo "::warning::Fallback-Serial wurde verwendet, aber ebenfalls kein Treffer: ${CCU_KEYPAD_SERIAL}"
               fi
-              DEV_DEVICE_COUNT="$(grep -Ec '<device ' "${DEVICELIST_FILE}" || true)"
-              STATE_DEVICE_COUNT="$(grep -Ec '<device ' "${STATELIST_FILE}" || true)"
-              DEV_CHANNEL_COUNT="$(grep -Ec '<channel ' "${DEVICELIST_FILE}" || true)"
-              STATE_CHANNEL_COUNT="$(grep -Ec '<channel ' "${STATELIST_FILE}" || true)"
+              DEV_DEVICE_COUNT="$(grep -aEc '<device ' "${DEVICELIST_FILE}" || true)"
+              STATE_DEVICE_COUNT="$(grep -aEc '<device ' "${STATELIST_FILE}" || true)"
+              DEV_CHANNEL_COUNT="$(grep -aEc '<channel ' "${DEVICELIST_FILE}" || true)"
+              STATE_CHANNEL_COUNT="$(grep -aEc '<channel ' "${STATELIST_FILE}" || true)"
               echo "--- Diagnose: XML-Zaehler ---"
               echo "devicelist: devices=${DEV_DEVICE_COUNT} channels=${DEV_CHANNEL_COUNT}"
               echo "statelist:  devices=${STATE_DEVICE_COUNT} channels=${STATE_CHANNEL_COUNT}"
 
               if [ "${DEV_DEVICE_COUNT}" = "0" ] && [ "${STATE_DEVICE_COUNT}" = "0" ]; then
                 echo "::warning::XML-API liefert keine <device>-Eintraege. Moegliche Ursache: fehlende WebUI-Rechte des XML-API-Users oder unerwartete Antwortstruktur."
-                if grep -qiE '<html|<form|login|anmeldung|auth' "${DEVICELIST_FILE_RAW}" || grep -qiE '<html|<form|login|anmeldung|auth' "${STATELIST_FILE_RAW}"; then
+                if grep -aqiE '<html|<form|login|anmeldung|auth' "${DEVICELIST_FILE_RAW}" || grep -aqiE '<html|<form|login|anmeldung|auth' "${STATELIST_FILE_RAW}"; then
                   echo "::warning::Antwort wirkt wie HTML/Login-Seite statt XML-Device-Liste. Bitte CCU_XMLAPI_USER/CCU_XMLAPI_PASSWORD und Benutzerrechte pruefen."
                 fi
                 echo "--- Diagnose: Rohauszug devicelist.cgi (erste 25 Zeilen) ---"
@@ -733,22 +733,22 @@ jobs:
 
               echo "--- Diagnose: Volltextsuche in devicelist (HmIP|WKP|KEYPAD|TAST|Serial, max. 80) ---"
               if [ -n "${CCU_KEYPAD_SERIAL}" ]; then
-                grep -Ein "HmIP|WKP|KEYPAD|TAST|${CCU_KEYPAD_SERIAL}" "${DEVICELIST_FILE}" | head -n 80 || true
+                grep -aEin "HmIP|WKP|KEYPAD|TAST|${CCU_KEYPAD_SERIAL}" "${DEVICELIST_FILE}" | head -n 80 || true
               else
-                grep -Ein "HmIP|WKP|KEYPAD|TAST" "${DEVICELIST_FILE}" | head -n 80 || true
+                grep -aEin "HmIP|WKP|KEYPAD|TAST" "${DEVICELIST_FILE}" | head -n 80 || true
               fi
 
               echo "--- Diagnose: Volltextsuche in statelist (HmIP|WKP|KEYPAD|TAST|Serial, max. 80) ---"
               if [ -n "${CCU_KEYPAD_SERIAL}" ]; then
-                grep -Ein "HmIP|WKP|KEYPAD|TAST|${CCU_KEYPAD_SERIAL}" "${STATELIST_FILE}" | head -n 80 || true
+                grep -aEin "HmIP|WKP|KEYPAD|TAST|${CCU_KEYPAD_SERIAL}" "${STATELIST_FILE}" | head -n 80 || true
               else
-                grep -Ein "HmIP|WKP|KEYPAD|TAST" "${STATELIST_FILE}" | head -n 80 || true
+                grep -aEin "HmIP|WKP|KEYPAD|TAST" "${STATELIST_FILE}" | head -n 80 || true
               fi
 
               echo "--- Diagnose: Erste 30 device-Zeilen aus devicelist ---"
-              grep -Ei '<device ' "${DEVICELIST_FILE}" | head -n 30 || true
+              grep -aEi '<device ' "${DEVICELIST_FILE}" | head -n 30 || true
               echo "--- Diagnose: Erste 30 device-Zeilen aus statelist ---"
-              grep -Ei '<device ' "${STATELIST_FILE}" | head -n 30 || true
+              grep -aEi '<device ' "${STATELIST_FILE}" | head -n 30 || true
               CCU_REQUIRE_KEYPAD_MATCH_NORMALIZED="$(printf '%s' "${CCU_REQUIRE_KEYPAD_MATCH}" | tr '[:upper:]' '[:lower:]')"
               if [ "${CCU_REQUIRE_KEYPAD_MATCH_NORMALIZED}" = "true" ]; then
                 echo "KEYPAD_STATUS=FEHLER" >> "$GITHUB_ENV"
@@ -763,7 +763,7 @@ jobs:
                 echo
                 echo "--- Keypad-Einstellungen (devicelist, Basisadresse: ${KEYPAD_ADDR}) ---"
                 awk -v addr="${KEYPAD_ADDR}" '
-                  $0 ~ "<device " && $0 ~ ("address=\"" addr "\"") {in_dev=1}
+                  $0 ~ "<device " && (index($0, "address=\"" addr "\"") || index($0, "address='" addr "'")) {in_dev=1}
                   in_dev {print}
                   in_dev && $0 ~ "</device>" {in_dev=0}
                 ' "${DEVICELIST_FILE}" || true
@@ -771,10 +771,10 @@ jobs:
                 echo
                 echo "--- Keypad-Status (statelist, Basisadresse: ${KEYPAD_ADDR}) ---"
                 awk -v addr="${KEYPAD_ADDR}" '
-                  $0 ~ "<device " && $0 ~ ("address=\"" addr "\"") {in_dev=1}
+                  $0 ~ "<device " && (index($0, "address=\"" addr "\"") || index($0, "address='" addr "'")) {in_dev=1}
                   in_dev {print}
                   in_dev && $0 ~ "</device>" {in_dev=0}
-                ' "${STATELIST_FILE}" | grep -E '<device |<channel |<datapoint ' || true
+                ' "${STATELIST_FILE}" | grep -aE '<device |<channel |<datapoint ' || true
               done <<< "${KEYPAD_ADDRESSES}"
 
               echo "KEYPAD_STATUS=OK" >> "$GITHUB_ENV"
