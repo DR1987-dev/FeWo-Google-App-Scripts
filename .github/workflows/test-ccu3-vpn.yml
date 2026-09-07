@@ -900,24 +900,45 @@ jobs:
                           MASTER_VERIFY_FILE="/tmp/ccu-keypad-mastervalue-verify-${CHANNEL_ISE_ID}.xml"
                           MASTER_VERIFY_ERR_FILE="/tmp/ccu-keypad-mastervalue-verify-${CHANNEL_ISE_ID}.log"
                           MASTER_VERIFY_HTTP_CODE="$(curl --connect-timeout 10 --max-time 30 --retry 1 --retry-delay 1 --retry-connrefused -sS "${XMLAPI_AUTH_ARGS[@]}" --get --data-urlencode "device_id=${CHANNEL_ISE_ID}" --data-urlencode "requested_names=${TARGET_MASTER_NAME}" -o "${MASTER_VERIFY_FILE}" -w "%{http_code}" "${MASTER_VERIFY_URL_BASE}" 2>"${MASTER_VERIFY_ERR_FILE}" || true)"
-                          MASTER_VERIFY_LINE="$(LC_ALL=C grep -aEi "name=['\"]${TARGET_MASTER_NAME}['\"]" "${MASTER_VERIFY_FILE}" | head -n 1 || true)"
+                          MASTER_VERIFY_PRETTY_FILE="${MASTER_VERIFY_FILE}.pretty"
+                          sed 's/></>\n</g' "${MASTER_VERIFY_FILE}" > "${MASTER_VERIFY_PRETTY_FILE}" 2>/dev/null || cp "${MASTER_VERIFY_FILE}" "${MASTER_VERIFY_PRETTY_FILE}"
+                          MASTER_VERIFY_MATCH="$(LC_ALL=C awk -v pname="${TARGET_MASTER_NAME}" -v pval="${CCU_KEYPAD_NEW_CODE}" '
+                            BEGIN { ok=0; in_block=0 }
+                            {
+                              line=$0
+                              if (line ~ ("name=[\"\047]" pname "[\"\047]")) {
+                                # Format A: name=... value=...
+                                if (line ~ ("value=[\"\047]" pval "[\"\047]")) { ok=1; print "ok"; exit }
+                                # Format B: <... name=...>842015</...>
+                                if (line ~ (">[[:space:]]*" pval "[[:space:]]*<")) { ok=1; print "ok"; exit }
+                                in_block=1
+                                next
+                              }
+                              if (in_block==1) {
+                                gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+                                # Format C: Wert in eigener Textzeile nach dem Tag
+                                if (line == pval) { ok=1; print "ok"; exit }
+                                if (line ~ /^</) { in_block=0 }
+                              }
+                            }
+                            END {
+                              if (ok==0) print "no"
+                            }
+                          ' "${MASTER_VERIFY_PRETTY_FILE}" | head -n 1 || true)"
 
-                          if [ "${MASTER_VERIFY_HTTP_CODE}" = "200" ] \
-                            && printf '%s' "${MASTER_VERIFY_LINE}" | grep -Eq "value=['\"]${CCU_KEYPAD_NEW_CODE}['\"]"; then
+                          if [ "${MASTER_VERIFY_HTTP_CODE}" = "200" ] && [ "${MASTER_VERIFY_MATCH}" = "ok" ]; then
                             echo "Code-Update erfolgreich fuer ${TARGET_CHANNEL_ADDR} (Master-Parameter: ${TARGET_MASTER_NAME}, Kanal-ise_id: ${CHANNEL_ISE_ID})."
                             UPDATE_OK_COUNT=$((UPDATE_OK_COUNT + 1))
                             UPDATE_DONE="true"
                           else
                             echo "::warning::mastervaluechange lieferte HTTP 200, aber Verifikation passt nicht fuer ${TARGET_CHANNEL_ADDR}."
                             echo "::warning::Verifikations-HTTP: ${MASTER_VERIFY_HTTP_CODE:-000}"
-                            if [ -n "${MASTER_VERIFY_LINE}" ]; then
-                              echo "::warning::Gelesene Antwortzeile: ${MASTER_VERIFY_LINE}"
-                            else
-                              echo "::warning::Keine Zeile fuer Parameter ${TARGET_MASTER_NAME} in Verifikationsantwort gefunden."
-                            fi
+                            echo "::warning::Verifikations-Matchstatus: ${MASTER_VERIFY_MATCH:-leer}"
+                            echo "--- Diagnose mastervalue.cgi (erste 40 Zeilen) ---"
+                            head -n 40 "${MASTER_VERIFY_PRETTY_FILE}" || true
                             tail -n 2 "${MASTER_VERIFY_ERR_FILE}" 2>/dev/null || true
                           fi
-                          rm -f "${MASTER_VERIFY_FILE}" "${MASTER_VERIFY_ERR_FILE}"
+                          rm -f "${MASTER_VERIFY_FILE}" "${MASTER_VERIFY_PRETTY_FILE}" "${MASTER_VERIFY_ERR_FILE}"
                         else
                           echo "::warning::Code-Update via mastervaluechange fehlgeschlagen fuer ${TARGET_CHANNEL_ADDR} (Parameter ${TARGET_MASTER_NAME}, HTTP ${MASTERVALUECHANGE_HTTP_CODE:-000})."
                           tail -n 2 "${MASTERVALUECHANGE_ERR_FILE}" 2>/dev/null || true
