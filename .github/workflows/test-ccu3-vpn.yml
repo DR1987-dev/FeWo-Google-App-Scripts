@@ -710,6 +710,14 @@ jobs:
           if [ "${DEVICELIST_HTTP_CODE}" = "200" ] && [ "${STATELIST_HTTP_CODE}" = "200" ]; then
             sed 's/></>\n</g' "${DEVICELIST_FILE_RAW}" > "${DEVICELIST_FILE}"
             sed 's/></>\n</g' "${STATELIST_FILE_RAW}" > "${STATELIST_FILE}"
+            # Einige CCU-Antworten enthalten ungueltige Bytefolgen.
+            # iconv -c entfernt diese, damit awk/grep stabil parsen.
+            if command -v iconv >/dev/null 2>&1; then
+              iconv -f UTF-8 -t UTF-8 -c "${DEVICELIST_FILE}" > "${DEVICELIST_FILE}.clean" 2>/dev/null || cp "${DEVICELIST_FILE}" "${DEVICELIST_FILE}.clean"
+              iconv -f UTF-8 -t UTF-8 -c "${STATELIST_FILE}" > "${STATELIST_FILE}.clean" 2>/dev/null || cp "${STATELIST_FILE}" "${STATELIST_FILE}.clean"
+              mv "${DEVICELIST_FILE}.clean" "${DEVICELIST_FILE}"
+              mv "${STATELIST_FILE}.clean" "${STATELIST_FILE}"
+            fi
 
             KEYPAD_HINT_LINES_DEV="$(grep -aEi '<device |<channel ' "${DEVICELIST_FILE}" | grep -aEi "${CCU_KEYPAD_MATCH_REGEX}" || true)"
             KEYPAD_HINT_LINES_STATE="$(grep -aEi '<device |<channel ' "${STATELIST_FILE}" | grep -aEi "${CCU_KEYPAD_MATCH_REGEX}" || true)"
@@ -795,7 +803,7 @@ jobs:
                 while IFS= read -r KEYPAD_ADDR; do
                   [ -z "${KEYPAD_ADDR}" ] && continue
                   TARGET_CHANNEL_ADDR="${KEYPAD_ADDR}:${CCU_KEYPAD_UPDATE_CHANNEL}"
-                  CHANNEL_BLOCK="$(awk -v addr="${TARGET_CHANNEL_ADDR}" '
+                  CHANNEL_BLOCK="$(LC_ALL=C awk -v addr="${TARGET_CHANNEL_ADDR}" '
                     $0 ~ "<channel " && (index($0, "address=\"" addr "\"") || index($0, "address='" addr "'")) {in_ch=1}
                     in_ch {print}
                     in_ch && $0 ~ "</channel>" {in_ch=0}
@@ -803,6 +811,8 @@ jobs:
 
                   if [ -z "${CHANNEL_BLOCK}" ]; then
                     echo "::warning::Kanal ${TARGET_CHANNEL_ADDR} nicht in statelist gefunden."
+                    AVAILABLE_CHANNELS="$(LC_ALL=C grep -aEi '<channel ' "${STATELIST_FILE}" | sed -n "s/.*address=['\"]\(${KEYPAD_ADDR}:[0-9][0-9]*\)['\"].*/\1/p" | sort -u | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+                    echo "::warning::Verfuegbare Kanaele fuer ${KEYPAD_ADDR}: ${AVAILABLE_CHANNELS:-keine erkannt}"
                     UPDATE_FAIL_COUNT=$((UPDATE_FAIL_COUNT + 1))
                     continue
                   fi
@@ -855,7 +865,7 @@ jobs:
 
                 echo
                 echo "--- Keypad-Einstellungen (devicelist, Basisadresse: ${KEYPAD_ADDR}) ---"
-                awk -v addr="${KEYPAD_ADDR}" '
+                LC_ALL=C awk -v addr="${KEYPAD_ADDR}" '
                   $0 ~ "<device " && (index($0, "address=\"" addr "\"") || index($0, "address='" addr "'")) {in_dev=1}
                   in_dev {print}
                   in_dev && $0 ~ "</device>" {in_dev=0}
@@ -863,7 +873,7 @@ jobs:
 
                 echo
                 echo "--- Keypad-Status (statelist, Basisadresse: ${KEYPAD_ADDR}) ---"
-                awk -v addr="${KEYPAD_ADDR}" '
+                LC_ALL=C awk -v addr="${KEYPAD_ADDR}" '
                   $0 ~ "<device " && (index($0, "address=\"" addr "\"") || index($0, "address='" addr "'")) {in_dev=1}
                   in_dev {print}
                   in_dev && $0 ~ "</device>" {in_dev=0}
