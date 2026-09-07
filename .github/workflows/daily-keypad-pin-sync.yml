@@ -1,0 +1,37 @@
+name: Daily Keypad PIN Sync
+
+on:
+  workflow_dispatch:
+  schedule:
+    # UTC times to cover Europe/Berlin 12:00 across DST changes.
+    - cron: "0 10 * * *"
+    - cron: "0 11 * * *"
+
+jobs:
+  keypad-pin-sync:
+    runs-on: ubuntu-latest
+    permissions: {}
+    env:
+      FEWO_SHEET_NAME: AlleBuchungen
+      CCU_IP: ${{ vars.CCU_IP }}
+      CCU_BASE_URL: https://${{ vars.CCU_IP }}
+      CCU_KEYPAD_SERIAL: ${{ vars.CCU_KEYPAD_SERIAL }}
+      CCU_KEYPAD_MASTER_NAME: ${{ vars.CCU_KEYPAD_MASTER_NAME || 'NUMERIC_PIN_CODE' }}
+      CCU_INSECURE_TLS: ${{ vars.CCU_INSECURE_TLS || 'true' }}
+      RUN_ONLY_BERLIN_HOUR: "12"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - run: npm ci
+
+      - name: Sync keypad PIN from Google Sheet
+        env:
+          GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+          FEWO_SPREADSHEET_ID: ${{ secrets.FEWO_SPREADSHEET_ID }}
+          CCU_XMLAPI_SID: ${{ secrets.CCU_XMLAPI_SID }}
+        run: node scripts/dailyKeypadPinSync.js
