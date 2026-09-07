@@ -895,9 +895,29 @@ jobs:
                         MASTERVALUECHANGE_HTTP_CODE="$(curl --connect-timeout 10 --max-time 30 --retry 1 --retry-delay 1 --retry-connrefused -sS "${XMLAPI_AUTH_ARGS[@]}" --get --data-urlencode "device_id=${CHANNEL_ISE_ID}" --data-urlencode "name=${TARGET_MASTER_NAME}" --data-urlencode "value=${CCU_KEYPAD_NEW_CODE}" -o "${MASTERVALUECHANGE_RESP_FILE}" -w "%{http_code}" "${MASTERVALUECHANGE_URL_BASE}" 2>"${MASTERVALUECHANGE_ERR_FILE}" || true)"
 
                         if [ "${MASTERVALUECHANGE_HTTP_CODE}" = "200" ]; then
-                          echo "Code-Update erfolgreich fuer ${TARGET_CHANNEL_ADDR} (Master-Parameter: ${TARGET_MASTER_NAME}, Kanal-ise_id: ${CHANNEL_ISE_ID})."
-                          UPDATE_OK_COUNT=$((UPDATE_OK_COUNT + 1))
-                          UPDATE_DONE="true"
+                          # Erfolg nur dann melden, wenn der neue Wert danach auch lesbar ist.
+                          MASTER_VERIFY_URL_BASE="http://${CCU_IP}/addons/xmlapi/mastervalue.cgi"
+                          MASTER_VERIFY_FILE="/tmp/ccu-keypad-mastervalue-verify-${CHANNEL_ISE_ID}.xml"
+                          MASTER_VERIFY_ERR_FILE="/tmp/ccu-keypad-mastervalue-verify-${CHANNEL_ISE_ID}.log"
+                          MASTER_VERIFY_HTTP_CODE="$(curl --connect-timeout 10 --max-time 30 --retry 1 --retry-delay 1 --retry-connrefused -sS "${XMLAPI_AUTH_ARGS[@]}" --get --data-urlencode "device_id=${CHANNEL_ISE_ID}" --data-urlencode "requested_names=${TARGET_MASTER_NAME}" -o "${MASTER_VERIFY_FILE}" -w "%{http_code}" "${MASTER_VERIFY_URL_BASE}" 2>"${MASTER_VERIFY_ERR_FILE}" || true)"
+                          MASTER_VERIFY_LINE="$(LC_ALL=C grep -aEi "name=['\"]${TARGET_MASTER_NAME}['\"]" "${MASTER_VERIFY_FILE}" | head -n 1 || true)"
+
+                          if [ "${MASTER_VERIFY_HTTP_CODE}" = "200" ] \
+                            && printf '%s' "${MASTER_VERIFY_LINE}" | grep -Eq "value=['\"]${CCU_KEYPAD_NEW_CODE}['\"]"; then
+                            echo "Code-Update erfolgreich fuer ${TARGET_CHANNEL_ADDR} (Master-Parameter: ${TARGET_MASTER_NAME}, Kanal-ise_id: ${CHANNEL_ISE_ID})."
+                            UPDATE_OK_COUNT=$((UPDATE_OK_COUNT + 1))
+                            UPDATE_DONE="true"
+                          else
+                            echo "::warning::mastervaluechange lieferte HTTP 200, aber Verifikation passt nicht fuer ${TARGET_CHANNEL_ADDR}."
+                            echo "::warning::Verifikations-HTTP: ${MASTER_VERIFY_HTTP_CODE:-000}"
+                            if [ -n "${MASTER_VERIFY_LINE}" ]; then
+                              echo "::warning::Gelesene Antwortzeile: ${MASTER_VERIFY_LINE}"
+                            else
+                              echo "::warning::Keine Zeile fuer Parameter ${TARGET_MASTER_NAME} in Verifikationsantwort gefunden."
+                            fi
+                            tail -n 2 "${MASTER_VERIFY_ERR_FILE}" 2>/dev/null || true
+                          fi
+                          rm -f "${MASTER_VERIFY_FILE}" "${MASTER_VERIFY_ERR_FILE}"
                         else
                           echo "::warning::Code-Update via mastervaluechange fehlgeschlagen fuer ${TARGET_CHANNEL_ADDR} (Parameter ${TARGET_MASTER_NAME}, HTTP ${MASTERVALUECHANGE_HTTP_CODE:-000})."
                           tail -n 2 "${MASTERVALUECHANGE_ERR_FILE}" 2>/dev/null || true
