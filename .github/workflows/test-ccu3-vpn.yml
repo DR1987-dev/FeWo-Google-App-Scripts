@@ -43,6 +43,12 @@ jobs:
       CCU_KEYPAD_SERIAL: ${{ vars.CCU_KEYPAD_SERIAL || '' }}
       # Optional: true erzwingt mindestens ein Keypad-Match in der XML-API-Auswertung.
       CCU_REQUIRE_KEYPAD_MATCH: ${{ vars.CCU_REQUIRE_KEYPAD_MATCH || 'false' }}
+      # Optional: true aktiviert das Setzen eines neuen Zugangscodes am Keypad.
+      CCU_KEYPAD_APPLY_CODE: ${{ vars.CCU_KEYPAD_APPLY_CODE || 'false' }}
+      # Zielkanal fuer den Zugangscode (Standard: 5).
+      CCU_KEYPAD_UPDATE_CHANNEL: ${{ vars.CCU_KEYPAD_UPDATE_CHANNEL || '5' }}
+      # Neuer Zugangscode fuer den Zielkanal (als Secret hinterlegen).
+      CCU_KEYPAD_NEW_CODE: ${{ secrets.CCU_KEYPAD_NEW_CODE }}
 
     steps:
       - name: Install WireGuard and tools
@@ -127,9 +133,30 @@ jobs:
             echo "::error::CCU_REQUIRE_KEYPAD_MATCH muss 'true' oder 'false' sein."
             ERRORS=$((ERRORS + 1))
           fi
+          CCU_KEYPAD_APPLY_CODE_NORMALIZED="$(printf '%s' "${CCU_KEYPAD_APPLY_CODE}" | tr '[:upper:]' '[:lower:]')"
+          if [ "${CCU_KEYPAD_APPLY_CODE_NORMALIZED}" != "true" ] && [ "${CCU_KEYPAD_APPLY_CODE_NORMALIZED}" != "false" ]; then
+            echo "::error::CCU_KEYPAD_APPLY_CODE muss 'true' oder 'false' sein."
+            ERRORS=$((ERRORS + 1))
+          fi
           if [ -n "${CCU_KEYPAD_SERIAL}" ] && ! printf '%s' "${CCU_KEYPAD_SERIAL}" | grep -Eq '^[0-9A-Fa-f]{6,32}$'; then
             echo "::error::CCU_KEYPAD_SERIAL muss alphanumerisch/hex sein (z. B. 002E9F29993E22)."
             ERRORS=$((ERRORS + 1))
+          fi
+          if ! printf '%s' "${CCU_KEYPAD_UPDATE_CHANNEL}" | grep -Eq '^[0-9]+$'; then
+            echo "::error::CCU_KEYPAD_UPDATE_CHANNEL muss numerisch sein (z. B. 5)."
+            ERRORS=$((ERRORS + 1))
+          elif [ "${CCU_KEYPAD_UPDATE_CHANNEL}" -lt 1 ] || [ "${CCU_KEYPAD_UPDATE_CHANNEL}" -gt 50 ]; then
+            echo "::error::CCU_KEYPAD_UPDATE_CHANNEL liegt ausserhalb 1-50."
+            ERRORS=$((ERRORS + 1))
+          fi
+          if [ "${CCU_KEYPAD_APPLY_CODE_NORMALIZED}" = "true" ]; then
+            if [ -z "${CCU_KEYPAD_NEW_CODE}" ]; then
+              echo "::error::CCU_KEYPAD_APPLY_CODE=true, aber Secret CCU_KEYPAD_NEW_CODE ist leer."
+              ERRORS=$((ERRORS + 1))
+            elif ! printf '%s' "${CCU_KEYPAD_NEW_CODE}" | grep -Eq '^[0-9]{4,10}$'; then
+              echo "::error::CCU_KEYPAD_NEW_CODE muss 4-10 Ziffern enthalten."
+              ERRORS=$((ERRORS + 1))
+            fi
           fi
           if [ "${CCU_XMLAPI_PATH#'/'}" = "${CCU_XMLAPI_PATH}" ]; then
             echo "::error::CCU_XMLAPI_PATH muss mit '/' beginnen (z. B. /addons/xmlapi/statelist.cgi)."
@@ -477,6 +504,7 @@ jobs:
           echo "HMIP_STATUS=FEHLER" >> "$GITHUB_ENV"
           echo "XMLAPI_STATUS=FEHLER" >> "$GITHUB_ENV"
           echo "KEYPAD_STATUS=WARN" >> "$GITHUB_ENV"
+          echo "KEYPAD_CODE_UPDATE_STATUS=SKIP" >> "$GITHUB_ENV"
           echo "VPN_STATUS=FEHLER" >> "$GITHUB_ENV"
 
           if ip link show "${WG_INTERFACE}" >/dev/null 2>&1; then
@@ -757,6 +785,71 @@ jobs:
               echo "Gefundene Keypad-Basisadressen:"
               printf '%s\n' "${KEYPAD_ADDRESSES}" | sed 's/^/  /'
 
+              CCU_KEYPAD_APPLY_CODE_NORMALIZED="$(printf '%s' "${CCU_KEYPAD_APPLY_CODE}" | tr '[:upper:]' '[:lower:]')"
+              if [ "${CCU_KEYPAD_APPLY_CODE_NORMALIZED}" = "true" ]; then
+                echo
+                echo "--- Keypad-Code-Update (Kanal ${CCU_KEYPAD_UPDATE_CHANNEL}) ---"
+                UPDATE_OK_COUNT=0
+                UPDATE_FAIL_COUNT=0
+
+                while IFS= read -r KEYPAD_ADDR; do
+                  [ -z "${KEYPAD_ADDR}" ] && continue
+                  TARGET_CHANNEL_ADDR="${KEYPAD_ADDR}:${CCU_KEYPAD_UPDATE_CHANNEL}"
+                  CHANNEL_BLOCK="$(awk -v addr="${TARGET_CHANNEL_ADDR}" '
+                    $0 ~ "<channel " && (index($0, "address=\"" addr "\"") || index($0, "address='" addr "'")) {in_ch=1}
+                    in_ch {print}
+                    in_ch && $0 ~ "</channel>" {in_ch=0}
+                  ' "${STATELIST_FILE}")"
+
+                  if [ -z "${CHANNEL_BLOCK}" ]; then
+                    echo "::warning::Kanal ${TARGET_CHANNEL_ADDR} nicht in statelist gefunden."
+                    UPDATE_FAIL_COUNT=$((UPDATE_FAIL_COUNT + 1))
+                    continue
+                  fi
+
+                  TARGET_DP_LINE="$(printf '%s\n' "${CHANNEL_BLOCK}" \
+                    | grep -aEi '<datapoint ' \
+                    | grep -aEi "type=['\"](ACCESSCODE|ACCESS_CODE|PIN|KEYCODE|CODE)['\"]" \
+                    | head -n 1 || true)"
+                  if [ -z "${TARGET_DP_LINE}" ]; then
+                    TARGET_DP_LINE="$(printf '%s\n' "${CHANNEL_BLOCK}" \
+                      | grep -aEi '<datapoint ' \
+                      | grep -aEi "type=['\"][^'\"]*(ACCESS|PIN|CODE)[^'\"]*['\"]" \
+                      | head -n 1 || true)"
+                  fi
+
+                  TARGET_DP_ID="$(printf '%s' "${TARGET_DP_LINE}" | sed -n "s/.* id=['\"]\([0-9][0-9]*\)['\"].*/\1/p")"
+                  TARGET_DP_TYPE="$(printf '%s' "${TARGET_DP_LINE}" | sed -n "s/.* type=['\"]\([^'\"]*\)['\"].*/\1/p")"
+
+                  if [ -z "${TARGET_DP_ID}" ]; then
+                    echo "::warning::Kein geeignetes Code-Datapoint im Kanal ${TARGET_CHANNEL_ADDR} gefunden."
+                    UPDATE_FAIL_COUNT=$((UPDATE_FAIL_COUNT + 1))
+                    continue
+                  fi
+
+                  UPDATE_URL_BASE="http://${CCU_IP}/addons/xmlapi/statechange.cgi"
+                  UPDATE_RESP_FILE="/tmp/ccu-keypad-update-${TARGET_DP_ID}.xml"
+                  UPDATE_ERR_FILE="/tmp/ccu-keypad-update-${TARGET_DP_ID}.log"
+                  UPDATE_HTTP_CODE="$(curl --connect-timeout 10 --max-time 30 --retry 1 --retry-delay 1 --retry-connrefused -sS "${XMLAPI_AUTH_ARGS[@]}" --get --data-urlencode "ise_id=${TARGET_DP_ID}" --data-urlencode "new_value=${CCU_KEYPAD_NEW_CODE}" -o "${UPDATE_RESP_FILE}" -w "%{http_code}" "${UPDATE_URL_BASE}" 2>"${UPDATE_ERR_FILE}" || true)"
+
+                  if [ "${UPDATE_HTTP_CODE}" = "200" ]; then
+                    echo "Code-Update erfolgreich fuer ${TARGET_CHANNEL_ADDR} (Datapoint: ${TARGET_DP_TYPE:-unbekannt}, ID: ${TARGET_DP_ID})."
+                    UPDATE_OK_COUNT=$((UPDATE_OK_COUNT + 1))
+                  else
+                    echo "::warning::Code-Update fehlgeschlagen fuer ${TARGET_CHANNEL_ADDR} (Datapoint-ID ${TARGET_DP_ID}, HTTP ${UPDATE_HTTP_CODE:-000})."
+                    tail -n 2 "${UPDATE_ERR_FILE}" 2>/dev/null || true
+                    UPDATE_FAIL_COUNT=$((UPDATE_FAIL_COUNT + 1))
+                  fi
+                  rm -f "${UPDATE_RESP_FILE}" "${UPDATE_ERR_FILE}"
+                done <<< "${KEYPAD_ADDRESSES}"
+
+                if [ "${UPDATE_FAIL_COUNT}" -eq 0 ] && [ "${UPDATE_OK_COUNT}" -gt 0 ]; then
+                  echo "KEYPAD_CODE_UPDATE_STATUS=OK" >> "$GITHUB_ENV"
+                else
+                  echo "KEYPAD_CODE_UPDATE_STATUS=FEHLER" >> "$GITHUB_ENV"
+                fi
+              fi
+
               while IFS= read -r KEYPAD_ADDR; do
                 [ -z "${KEYPAD_ADDR}" ] && continue
 
@@ -808,6 +901,7 @@ jobs:
           HMIP="${HMIP_STATUS:-FEHLER}"
           XMLAPI="${XMLAPI_STATUS:-FEHLER}"
           KEYPAD="${KEYPAD_STATUS:-FEHLER}"
+          KEYPAD_CODE_UPDATE="${KEYPAD_CODE_UPDATE_STATUS:-SKIP}"
           HANDSHAKE="${HANDSHAKE_STATUS:-FEHLER}"
           HANDSHAKE_DIAG_CODE="${HANDSHAKE_ROOT_CAUSE_CODE:-F}"
           HANDSHAKE_DIAG_DETAILS="${HANDSHAKE_ROOT_CAUSE_DETAILS:-Keine eindeutige Ursache ermittelt.}"
@@ -823,6 +917,7 @@ jobs:
           echo "  HmIP-Port ${CCU_HMIP_PORT}:     ${HMIP}"
           echo "  XML-API (${CCU_XMLAPI_PATH}):  ${XMLAPI}"
           echo "  Keypad-Daten (XML-API): ${KEYPAD}"
+          echo "  Keypad-Code-Update:     ${KEYPAD_CODE_UPDATE}"
           echo "============================================"
 
           # WireGuard konnte nicht gestartet werden
@@ -841,6 +936,15 @@ jobs:
                 exit 1
               fi
               echo "::warning::HmIP-Port ${CCU_HMIP_PORT} nicht erreichbar, wird aber nicht erzwungen (CCU_REQUIRE_HMIP_PORT=false)."
+            fi
+            CCU_KEYPAD_APPLY_CODE_NORMALIZED="$(printf '%s' "${CCU_KEYPAD_APPLY_CODE}" | tr '[:upper:]' '[:lower:]')"
+            if [ "${CCU_KEYPAD_APPLY_CODE_NORMALIZED}" = "true" ] && [ "${KEYPAD_CODE_UPDATE}" != "OK" ]; then
+              echo "Ergebnis: KC - Keypad-Code-Update wurde angefordert, konnte aber nicht erfolgreich abgeschlossen werden."
+              echo "Pruefen:"
+              echo "  - Secret CCU_KEYPAD_NEW_CODE gesetzt (4-10 Ziffern)"
+              echo "  - CCU_KEYPAD_UPDATE_CHANNEL stimmt mit dem Code-Kanal ueberein"
+              echo "  - XML-API erlaubt Schreiben auf das gefundene Datapoint"
+              exit 1
             fi
             echo "Ergebnis: A - WireGuard funktioniert und CCU3 inkl. XML-API erreichbar. Alles OK."
             exit 0
