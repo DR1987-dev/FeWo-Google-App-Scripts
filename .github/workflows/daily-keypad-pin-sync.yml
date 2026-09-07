@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
   schedule:
     # UTC times to cover Europe/Berlin 12:00 across DST changes.
-    - cron: "0 10 * * *"
-    - cron: "0 11 * * *"
+    - cron: "7 10 * * *"
+    - cron: "7 11 * * *"
 
 jobs:
   keypad-pin-sync:
