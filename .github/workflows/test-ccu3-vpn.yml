@@ -803,27 +803,32 @@ jobs:
                 while IFS= read -r KEYPAD_ADDR; do
                   [ -z "${KEYPAD_ADDR}" ] && continue
                   TARGET_CHANNEL_ADDR="${KEYPAD_ADDR}:${CCU_KEYPAD_UPDATE_CHANNEL}"
-                  CHANNEL_BLOCK="$(LC_ALL=C awk -v addr="${TARGET_CHANNEL_ADDR}" '
-                    $0 ~ "<channel " && (index($0, "address=\"" addr "\"") || index($0, "address='" addr "'")) {in_ch=1}
-                    in_ch {print}
-                    in_ch && $0 ~ "</channel>" {in_ch=0}
-                  ' "${STATELIST_FILE}")"
+                  CHANNEL_LINE="$(LC_ALL=C grep -aEi '<channel ' "${DEVICELIST_FILE}" \
+                    | grep -aEi "address=['\"]${TARGET_CHANNEL_ADDR}['\"]|index=['\"]${CCU_KEYPAD_UPDATE_CHANNEL}['\"]" \
+                    | head -n 1 || true)"
+                  CHANNEL_ISE_ID="$(printf '%s' "${CHANNEL_LINE}" | sed -n "s/.* ise_id=['\"]\([0-9][0-9]*\)['\"].*/\1/p")"
 
-                  if [ -z "${CHANNEL_BLOCK}" ]; then
-                    echo "::warning::Kanal ${TARGET_CHANNEL_ADDR} nicht in statelist gefunden."
-                    AVAILABLE_CHANNELS="$(LC_ALL=C grep -aEi '<channel ' "${STATELIST_FILE}" | sed -n "s/.*address=['\"]\(${KEYPAD_ADDR}:[0-9][0-9]*\)['\"].*/\1/p" | sort -u | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+                  if [ -z "${CHANNEL_ISE_ID}" ]; then
+                    echo "::warning::Kanal ${TARGET_CHANNEL_ADDR} nicht in devicelist gefunden."
+                    AVAILABLE_CHANNELS="$(LC_ALL=C grep -aEi '<channel ' "${DEVICELIST_FILE}" | sed -n "s/.*address=['\"]\(${KEYPAD_ADDR}:[0-9][0-9]*\)['\"].*/\1/p" | sort -u | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
                     echo "::warning::Verfuegbare Kanaele fuer ${KEYPAD_ADDR}: ${AVAILABLE_CHANNELS:-keine erkannt}"
                     UPDATE_FAIL_COUNT=$((UPDATE_FAIL_COUNT + 1))
                     continue
                   fi
 
-                  TARGET_DP_LINE="$(printf '%s\n' "${CHANNEL_BLOCK}" \
-                    | grep -aEi '<datapoint ' \
+                  TARGET_DP_LINE="$(LC_ALL=C grep -aEi '<datapoint ' "${STATELIST_FILE}" \
+                    | grep -aEi "parent=['\"]${CHANNEL_ISE_ID}['\"]|parent_channel=['\"]${CHANNEL_ISE_ID}['\"]|channel=['\"]${CHANNEL_ISE_ID}['\"]" \
                     | grep -aEi "type=['\"](ACCESSCODE|ACCESS_CODE|PIN|KEYCODE|CODE)['\"]" \
                     | head -n 1 || true)"
                   if [ -z "${TARGET_DP_LINE}" ]; then
-                    TARGET_DP_LINE="$(printf '%s\n' "${CHANNEL_BLOCK}" \
-                      | grep -aEi '<datapoint ' \
+                    TARGET_DP_LINE="$(LC_ALL=C grep -aEi '<datapoint ' "${STATELIST_FILE}" \
+                      | grep -aEi "parent=['\"]${CHANNEL_ISE_ID}['\"]|parent_channel=['\"]${CHANNEL_ISE_ID}['\"]|channel=['\"]${CHANNEL_ISE_ID}['\"]" \
+                      | grep -aEi "type=['\"][^'\"]*(ACCESS|PIN|CODE)[^'\"]*['\"]" \
+                      | head -n 1 || true)"
+                  fi
+                  if [ -z "${TARGET_DP_LINE}" ]; then
+                    TARGET_DP_LINE="$(LC_ALL=C grep -aEi '<datapoint ' "${STATELIST_FILE}" \
+                      | grep -aEi "address=['\"]${TARGET_CHANNEL_ADDR}:[^'\"]+['\"]|name=['\"][^'\"]*:${CCU_KEYPAD_UPDATE_CHANNEL}[^'\"]*['\"]" \
                       | grep -aEi "type=['\"][^'\"]*(ACCESS|PIN|CODE)[^'\"]*['\"]" \
                       | head -n 1 || true)"
                   fi
@@ -833,6 +838,7 @@ jobs:
 
                   if [ -z "${TARGET_DP_ID}" ]; then
                     echo "::warning::Kein geeignetes Code-Datapoint im Kanal ${TARGET_CHANNEL_ADDR} gefunden."
+                    echo "::warning::Kanal-ise_id fuer ${TARGET_CHANNEL_ADDR}: ${CHANNEL_ISE_ID}"
                     UPDATE_FAIL_COUNT=$((UPDATE_FAIL_COUNT + 1))
                     continue
                   fi
