@@ -836,27 +836,69 @@ jobs:
                   TARGET_DP_ID="$(printf '%s' "${TARGET_DP_LINE}" | sed -n "s/.* id=['\"]\([0-9][0-9]*\)['\"].*/\1/p")"
                   TARGET_DP_TYPE="$(printf '%s' "${TARGET_DP_LINE}" | sed -n "s/.* type=['\"]\([^'\"]*\)['\"].*/\1/p")"
 
-                  if [ -z "${TARGET_DP_ID}" ]; then
-                    echo "::warning::Kein geeignetes Code-Datapoint im Kanal ${TARGET_CHANNEL_ADDR} gefunden."
+                  UPDATE_DONE="false"
+                  if [ -n "${TARGET_DP_ID}" ]; then
+                    UPDATE_URL_BASE="http://${CCU_IP}/addons/xmlapi/statechange.cgi"
+                    UPDATE_RESP_FILE="/tmp/ccu-keypad-update-${TARGET_DP_ID}.xml"
+                    UPDATE_ERR_FILE="/tmp/ccu-keypad-update-${TARGET_DP_ID}.log"
+                    UPDATE_HTTP_CODE="$(curl --connect-timeout 10 --max-time 30 --retry 1 --retry-delay 1 --retry-connrefused -sS "${XMLAPI_AUTH_ARGS[@]}" --get --data-urlencode "ise_id=${TARGET_DP_ID}" --data-urlencode "new_value=${CCU_KEYPAD_NEW_CODE}" -o "${UPDATE_RESP_FILE}" -w "%{http_code}" "${UPDATE_URL_BASE}" 2>"${UPDATE_ERR_FILE}" || true)"
+
+                    if [ "${UPDATE_HTTP_CODE}" = "200" ]; then
+                      echo "Code-Update erfolgreich fuer ${TARGET_CHANNEL_ADDR} (Datapoint: ${TARGET_DP_TYPE:-unbekannt}, ID: ${TARGET_DP_ID})."
+                      UPDATE_OK_COUNT=$((UPDATE_OK_COUNT + 1))
+                      UPDATE_DONE="true"
+                    else
+                      echo "::warning::Code-Update via statechange fehlgeschlagen fuer ${TARGET_CHANNEL_ADDR} (Datapoint-ID ${TARGET_DP_ID}, HTTP ${UPDATE_HTTP_CODE:-000})."
+                      tail -n 2 "${UPDATE_ERR_FILE}" 2>/dev/null || true
+                    fi
+                    rm -f "${UPDATE_RESP_FILE}" "${UPDATE_ERR_FILE}"
+                  fi
+
+                  if [ "${UPDATE_DONE}" != "true" ]; then
+                    echo "Info: Suche Master-Parameter fuer ${TARGET_CHANNEL_ADDR} (Kanal-ise_id ${CHANNEL_ISE_ID})..."
+                    MASTERVALUE_URL_BASE="http://${CCU_IP}/addons/xmlapi/mastervalue.cgi"
+                    MASTERVALUE_XML_FILE="/tmp/ccu-keypad-mastervalue-${CHANNEL_ISE_ID}.xml"
+                    MASTERVALUE_ERR_FILE="/tmp/ccu-keypad-mastervalue-${CHANNEL_ISE_ID}.log"
+                    MASTERVALUE_HTTP_CODE="$(curl --connect-timeout 10 --max-time 30 --retry 1 --retry-delay 1 --retry-connrefused -sS "${XMLAPI_AUTH_ARGS[@]}" --get --data-urlencode "device_id=${CHANNEL_ISE_ID}" -o "${MASTERVALUE_XML_FILE}" -w "%{http_code}" "${MASTERVALUE_URL_BASE}" 2>"${MASTERVALUE_ERR_FILE}" || true)"
+
+                    if [ "${MASTERVALUE_HTTP_CODE}" = "200" ]; then
+                      MASTER_NAMES="$(LC_ALL=C grep -aEo "name=['\"][^'\"]+['\"]" "${MASTERVALUE_XML_FILE}" | sed -E "s/name=['\"]([^'\"]+)['\"]/\1/" | sort -u)"
+                      if [ -n "${MASTER_NAMES}" ]; then
+                        echo "Master-Parameter gefunden fuer ${TARGET_CHANNEL_ADDR}:"
+                        printf '%s\n' "${MASTER_NAMES}" | sed 's/^/  - /'
+                      fi
+
+                      TARGET_MASTER_NAME="$(printf '%s\n' "${MASTER_NAMES}" | grep -Ei 'ACCESS|PIN|CODE|AUTH|KEY' | head -n 1 || true)"
+                      if [ -n "${TARGET_MASTER_NAME}" ]; then
+                        MASTERVALUECHANGE_URL_BASE="http://${CCU_IP}/addons/xmlapi/mastervaluechange.cgi"
+                        MASTERVALUECHANGE_RESP_FILE="/tmp/ccu-keypad-mastervaluechange-${CHANNEL_ISE_ID}.xml"
+                        MASTERVALUECHANGE_ERR_FILE="/tmp/ccu-keypad-mastervaluechange-${CHANNEL_ISE_ID}.log"
+                        MASTERVALUECHANGE_HTTP_CODE="$(curl --connect-timeout 10 --max-time 30 --retry 1 --retry-delay 1 --retry-connrefused -sS "${XMLAPI_AUTH_ARGS[@]}" --get --data-urlencode "device_id=${CHANNEL_ISE_ID}" --data-urlencode "name=${TARGET_MASTER_NAME}" --data-urlencode "value=${CCU_KEYPAD_NEW_CODE}" -o "${MASTERVALUECHANGE_RESP_FILE}" -w "%{http_code}" "${MASTERVALUECHANGE_URL_BASE}" 2>"${MASTERVALUECHANGE_ERR_FILE}" || true)"
+
+                        if [ "${MASTERVALUECHANGE_HTTP_CODE}" = "200" ]; then
+                          echo "Code-Update erfolgreich fuer ${TARGET_CHANNEL_ADDR} (Master-Parameter: ${TARGET_MASTER_NAME}, Kanal-ise_id: ${CHANNEL_ISE_ID})."
+                          UPDATE_OK_COUNT=$((UPDATE_OK_COUNT + 1))
+                          UPDATE_DONE="true"
+                        else
+                          echo "::warning::Code-Update via mastervaluechange fehlgeschlagen fuer ${TARGET_CHANNEL_ADDR} (Parameter ${TARGET_MASTER_NAME}, HTTP ${MASTERVALUECHANGE_HTTP_CODE:-000})."
+                          tail -n 2 "${MASTERVALUECHANGE_ERR_FILE}" 2>/dev/null || true
+                        fi
+                        rm -f "${MASTERVALUECHANGE_RESP_FILE}" "${MASTERVALUECHANGE_ERR_FILE}"
+                      else
+                        echo "::warning::Kein passender Master-Parameter fuer Code im Kanal ${TARGET_CHANNEL_ADDR} gefunden."
+                      fi
+                    else
+                      echo "::warning::mastervalue.cgi fuer Kanal ${TARGET_CHANNEL_ADDR} nicht abrufbar (HTTP ${MASTERVALUE_HTTP_CODE:-000})."
+                      tail -n 2 "${MASTERVALUE_ERR_FILE}" 2>/dev/null || true
+                    fi
+                    rm -f "${MASTERVALUE_XML_FILE}" "${MASTERVALUE_ERR_FILE}"
+                  fi
+
+                  if [ "${UPDATE_DONE}" != "true" ]; then
+                    echo "::warning::Kein geeignetes Code-Datapoint/kein passender Master-Parameter im Kanal ${TARGET_CHANNEL_ADDR} gefunden."
                     echo "::warning::Kanal-ise_id fuer ${TARGET_CHANNEL_ADDR}: ${CHANNEL_ISE_ID}"
                     UPDATE_FAIL_COUNT=$((UPDATE_FAIL_COUNT + 1))
-                    continue
                   fi
-
-                  UPDATE_URL_BASE="http://${CCU_IP}/addons/xmlapi/statechange.cgi"
-                  UPDATE_RESP_FILE="/tmp/ccu-keypad-update-${TARGET_DP_ID}.xml"
-                  UPDATE_ERR_FILE="/tmp/ccu-keypad-update-${TARGET_DP_ID}.log"
-                  UPDATE_HTTP_CODE="$(curl --connect-timeout 10 --max-time 30 --retry 1 --retry-delay 1 --retry-connrefused -sS "${XMLAPI_AUTH_ARGS[@]}" --get --data-urlencode "ise_id=${TARGET_DP_ID}" --data-urlencode "new_value=${CCU_KEYPAD_NEW_CODE}" -o "${UPDATE_RESP_FILE}" -w "%{http_code}" "${UPDATE_URL_BASE}" 2>"${UPDATE_ERR_FILE}" || true)"
-
-                  if [ "${UPDATE_HTTP_CODE}" = "200" ]; then
-                    echo "Code-Update erfolgreich fuer ${TARGET_CHANNEL_ADDR} (Datapoint: ${TARGET_DP_TYPE:-unbekannt}, ID: ${TARGET_DP_ID})."
-                    UPDATE_OK_COUNT=$((UPDATE_OK_COUNT + 1))
-                  else
-                    echo "::warning::Code-Update fehlgeschlagen fuer ${TARGET_CHANNEL_ADDR} (Datapoint-ID ${TARGET_DP_ID}, HTTP ${UPDATE_HTTP_CODE:-000})."
-                    tail -n 2 "${UPDATE_ERR_FILE}" 2>/dev/null || true
-                    UPDATE_FAIL_COUNT=$((UPDATE_FAIL_COUNT + 1))
-                  fi
-                  rm -f "${UPDATE_RESP_FILE}" "${UPDATE_ERR_FILE}"
                 done <<< "${KEYPAD_ADDRESSES}"
 
                 if [ "${UPDATE_FAIL_COUNT}" -eq 0 ] && [ "${UPDATE_OK_COUNT}" -gt 0 ]; then
