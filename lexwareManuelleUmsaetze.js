@@ -121,6 +121,22 @@ function toDateString_(value) {
     }
     var str = String(value).trim();
     if (!str) return "";
+    var germanMatch = str.match(/^(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})$/);
+    if (germanMatch) {
+        var day = Number(germanMatch[1]);
+        var month = Number(germanMatch[2]);
+        var year = Number(germanMatch[3]);
+        var parsedGerman = new Date(year, month - 1, day);
+        if (
+            !isNaN(parsedGerman.getTime()) &&
+            parsedGerman.getFullYear() === year &&
+            parsedGerman.getMonth() === month - 1 &&
+            parsedGerman.getDate() === day
+        ) {
+            return formatDate_(parsedGerman);
+        }
+        return "";
+    }
     var d = new Date(str);
     if (!isNaN(d.getTime())) return formatDate_(d);
     // If the string is already in JJJJ-MM-TT format, return as-is
@@ -246,6 +262,12 @@ function createLexwareManuellerUmsatz_(params) {
         (body && (body.id || body.voucherId || body.uuid)) || ""
     );
 
+    if (!voucherId) {
+        throw new Error(
+            "Lexware hat keinen Beleg-Identifier für '" + voucherNumber + "' zurückgegeben."
+        );
+    }
+
     Logger.log(
         "Manuelle Umsätze: Beleg erstellt – Typ=" + typ +
         ", Ref=" + params.belegRef +
@@ -357,6 +379,7 @@ function createLexwareManuelleUmsaetze() {
     var created = 0;
     var skipped = 0;
     var errors  = 0;
+    var messages = [];
 
     for (var g = 0; g < groupOrder.length; g++) {
         var ref   = groupOrder[g];
@@ -377,40 +400,44 @@ function createLexwareManuelleUmsaetze() {
 
         // Skip if already booked
         if (lexwareBelegId) {
-            Logger.log(
+            var alreadyBookedMessage =
                 "Manuelle Umsätze: Beleg_Ref '" + ref +
-                "' – bereits gebucht (ID=" + lexwareBelegId + "), übersprungen."
-            );
+                "' – bereits gebucht (ID=" + lexwareBelegId + "), übersprungen.";
+            Logger.log(alreadyBookedMessage);
+            messages.push(alreadyBookedMessage);
             skipped++;
             continue;
         }
 
         // Skip inactive
         if (aktiv === false || String(aktiv).toUpperCase() === "FALSE" || aktiv === 0) {
-            Logger.log(
-                "Manuelle Umsätze: Beleg_Ref '" + ref + "' – inaktiv, übersprungen."
-            );
+            var inactiveMessage =
+                "Manuelle Umsätze: Beleg_Ref '" + ref + "' – inaktiv, übersprungen.";
+            Logger.log(inactiveMessage);
+            messages.push(inactiveMessage);
             skipped++;
             continue;
         }
 
         // Validate type
         if (typ !== "salesinvoice" && typ !== "purchaseinvoice") {
-            Logger.log(
+            var invalidTypeMessage =
                 "Manuelle Umsätze: Beleg_Ref '" + ref +
                 "' – ungültiger Typ '" + typ +
-                "' (erlaubt: salesinvoice, purchaseinvoice), übersprungen."
-            );
+                "' (erlaubt: salesinvoice, purchaseinvoice), übersprungen.";
+            Logger.log(invalidTypeMessage);
+            messages.push(invalidTypeMessage);
             errors++;
             continue;
         }
 
         // Validate contact number
         if (!kontaktnummer) {
-            Logger.log(
+            var missingContactMessage =
                 "Manuelle Umsätze: Beleg_Ref '" + ref +
-                "' – Kontaktnummer fehlt, übersprungen."
-            );
+                "' – Kontaktnummer fehlt, übersprungen.";
+            Logger.log(missingContactMessage);
+            messages.push(missingContactMessage);
             errors++;
             continue;
         }
@@ -464,10 +491,11 @@ function createLexwareManuelleUmsaetze() {
         }
 
         if (lineItems.length === 0) {
-            Logger.log(
+            var noLineItemsMessage =
                 "Manuelle Umsätze: Beleg_Ref '" + ref +
-                "' – keine gültigen Positionen, übersprungen."
-            );
+                "' – keine gültigen Positionen, übersprungen.";
+            Logger.log(noLineItemsMessage);
+            messages.push(noLineItemsMessage);
             skipped++;
             continue;
         }
@@ -483,11 +511,12 @@ function createLexwareManuelleUmsaetze() {
             if (contactId) contactCache[kontaktnummer] = contactId;
         }
         if (!contactId) {
-            Logger.log(
+            var contactNotFoundMessage =
                 "Manuelle Umsätze: Beleg_Ref '" + ref +
                 "' – Kontaktnummer '" + kontaktnummer +
-                "' (" + (kontakt || "?") + ") nicht in Lexware gefunden, übersprungen."
-            );
+                "' (" + (kontakt || "?") + ") nicht in Lexware gefunden, übersprungen.";
+            Logger.log(contactNotFoundMessage);
+            messages.push(contactNotFoundMessage);
             errors++;
             continue;
         }
@@ -518,12 +547,17 @@ function createLexwareManuelleUmsaetze() {
                 "Manuelle Umsätze: ✅ Beleg_Ref '" + ref +
                 "' – Beleg erstellt: " + voucherId
             );
+            messages.push(
+                "Manuelle Umsätze: Beleg_Ref '" + ref +
+                "' – Beleg erstellt: " + voucherId
+            );
             created++;
         } catch (e) {
-            Logger.log(
-                "Manuelle Umsätze: ❌ Beleg_Ref '" + ref +
-                "' – Fehler beim Erstellen: " + e.message
-            );
+            var createErrorMessage =
+                "Manuelle Umsätze: Beleg_Ref '" + ref +
+                "' – Fehler beim Erstellen: " + e.message;
+            Logger.log("❌ " + createErrorMessage);
+            messages.push(createErrorMessage);
             errors++;
         }
     }
@@ -534,5 +568,11 @@ function createLexwareManuelleUmsaetze() {
         ", Fehler=" + errors
     );
 
-    return { ok: errors === 0, created: created, skipped: skipped, errors: errors };
+    return {
+        ok: errors === 0,
+        created: created,
+        skipped: skipped,
+        errors: errors,
+        messages: messages
+    };
 }
