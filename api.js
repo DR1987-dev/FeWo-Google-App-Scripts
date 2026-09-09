@@ -229,6 +229,14 @@ function doPost(e) {
             });
         }
 
+        if (
+            action === "createLexwareManuelPayment" ||
+            action === "createLexwareManualPayment" ||
+            action === "createLexwareManuelleUmsaetze"
+        ) {
+            return runManualLexwarePaymentAction_();
+        }
+
         return jsonResponse_(400, {
             ok: false,
             error: "Unknown action"
@@ -393,6 +401,30 @@ function toNumberOrUndefined_(value) {
 
     var n = Number(value);
     return isNaN(n) ? undefined : n;
+}
+
+function runManualLexwarePaymentAction_() {
+    var result = createLexwareManuelleUmsaetze();
+    var messages = result && result.messages ? result.messages : [];
+    var summary = "created=" + (result && result.created || 0) +
+        ", skipped=" + (result && result.skipped || 0) +
+        ", errors=" + (result && result.errors || 0);
+
+    if (result && result.ok) {
+        return jsonResponse_(200, {
+            ok: true,
+            message: "Manual Lexware payment processing completed (" + summary + ").",
+            result: result
+        });
+    }
+
+    return jsonResponse_(422, {
+        ok: false,
+        error: messages.length
+            ? messages.join(" | ")
+            : "Manual Lexware payment processing failed (" + summary + ").",
+        result: result
+    });
 }
 
 function readSheetObjects_(sheetName) {
