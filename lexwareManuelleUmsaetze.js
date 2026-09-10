@@ -187,9 +187,6 @@ function buildVoucherNumberRetryVariant_(voucherNumber) {
 
 function isVoucherNumberConflictError_(error) {
     var message = String((error && error.message) || error || "").toLowerCase();
-    var hasConflictStatus =
-        message.indexOf("failed (409)") !== -1 ||
-        message.indexOf("failed (422)") !== -1;
     var mentionsVoucherNumber =
         message.indexOf("vouchernumber") !== -1 ||
         message.indexOf("belegnummer") !== -1;
@@ -198,7 +195,7 @@ function isVoucherNumberConflictError_(error) {
         message.indexOf("bereits") !== -1 ||
         message.indexOf("duplicate") !== -1 ||
         message.indexOf("existiert") !== -1;
-    return hasConflictStatus && mentionsVoucherNumber && isDuplicateHint;
+    return mentionsVoucherNumber && isDuplicateHint;
 }
 
 // ---- Voucher creation --------------------------------------
