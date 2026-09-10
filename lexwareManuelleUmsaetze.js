@@ -6,9 +6,10 @@
 // Beleg (Einnahme oder Ausgabe) in Lexware Office.
 //
 // Mehrere Positionen (lineItems) pro Beleg werden unterstützt:
-// Alle Zeilen mit derselben Beleg_Ref bilden einen gemeinsamen
-// Beleg. Die Belegkopf-Felder (Typ, Kontaktnummer, Datum etc.)
-// werden von der ersten Zeile der Gruppe übernommen.
+// Alle Zeilen mit derselben Belegnummer (falls gesetzt), sonst mit
+// derselben Beleg_Ref, bilden einen gemeinsamen Beleg. Die
+// Belegkopf-Felder (Typ, Kontaktnummer, Datum etc.) werden von der
+// ersten Zeile der Gruppe übernommen.
 //
 // Erforderliche Spalten im Blatt "Lexware Manuelle Umsätze":
 //
@@ -36,8 +37,9 @@
 //
 // Mehrere Positionen für einen Beleg:
 //   Trage jede Position in einer eigenen Zeile ein. Alle Zeilen mit
-//   derselben Beleg_Ref (Spalte A) werden zu einem Beleg zusammengefasst.
-//   Die Felder Typ, Kontaktnummer, Belegdatum usw. werden nur aus der
+//   derselben Belegnummer (Spalte G, wenn gesetzt), sonst derselben
+//   Beleg_Ref (Spalte A), werden zu einem Beleg zusammengefasst. Die
+//   Felder Typ, Kontaktnummer, Belegdatum usw. werden nur aus der
 //   ersten Zeile der Gruppe gelesen.
 //
 // Script Properties (optional):
@@ -198,6 +200,19 @@ function isVoucherNumberConflictError_(error) {
     return mentionsVoucherNumber && isDuplicateHint;
 }
 
+function isActiveRow_(value) {
+    if (value === true) return true;
+    if (value === false || value === 0) return false;
+    var normalized = String(value === null || value === undefined ? "" : value)
+        .trim()
+        .toUpperCase();
+    if (!normalized) return true;
+    if (normalized === "FALSE" || normalized === "0" || normalized === "NO" || normalized === "NEIN") {
+        return false;
+    }
+    return true;
+}
+
 // ---- Voucher creation --------------------------------------
 
 /**
@@ -328,9 +343,9 @@ function createLexwareManuellerUmsatz_(params) {
  * jeden noch nicht gebuchten, aktiven Beleg einmalig einen Eintrag
  * in Lexware Office.
  *
- * Alle Zeilen mit derselben Beleg_Ref bilden einen gemeinsamen Beleg
- * (mehrere Positionen). Die Belegkopf-Felder werden von der ersten Zeile
- * der jeweiligen Gruppe übernommen.
+ * Alle Zeilen mit derselben Belegnummer (falls gesetzt), sonst derselben
+ * Beleg_Ref, bilden einen gemeinsamen Beleg (mehrere Positionen). Die
+ * Belegkopf-Felder werden von der ersten Zeile der jeweiligen Gruppe übernommen.
  *
  * Zurückgeschrieben werden (nur in die erste Zeile der Gruppe):
  *   - Spalte M (Zuletzt_Gebucht)  – heutiges Datum
@@ -399,14 +414,15 @@ function createLexwareManuelleUmsaetze(options) {
     var contactIndex  = null;
     var categoryCache = {};
 
-    // ---- Group rows by Beleg_Ref (in order of first occurrence) ----
-    var groupOrder = [];  // Beleg_Ref values in insertion order
-    var groups = {};      // { belegRef: { firstRowNum, headerRow, rows: [{rowNum, row}] } }
+    // ---- Group rows by Belegnummer (fallback: Beleg_Ref) ----
+    var groupOrder = [];
+    var groups = {};      // { groupKey: { label, firstRowNum, headerRow, rows: [{rowNum, row}] } }
 
     for (var i = 0; i < data.length; i++) {
         var row = data[i];
         var rowNum = i + 2; // 1-based sheet row
         var belegRef = String(readCell_(row, colMap, "Beleg_Ref") || "").trim();
+        var belegnummer = String(readCell_(row, colMap, "Belegnummer") || "").trim();
 
         if (!belegRef) {
             Logger.log(
@@ -420,15 +436,19 @@ function createLexwareManuelleUmsaetze(options) {
             continue;
         }
 
-        if (!Object.prototype.hasOwnProperty.call(groups, belegRef)) {
-            groupOrder.push(belegRef);
-            groups[belegRef] = {
+        var groupKey = belegnummer ? ("BN:" + belegnummer) : ("BR:" + belegRef);
+        var groupLabel = belegnummer ? ("Belegnummer '" + belegnummer + "'") : ("Beleg_Ref '" + belegRef + "'");
+
+        if (!Object.prototype.hasOwnProperty.call(groups, groupKey)) {
+            groupOrder.push(groupKey);
+            groups[groupKey] = {
+                label: groupLabel,
                 firstRowNum: rowNum,
                 headerRow: row,
                 rows: []
             };
         }
-        groups[belegRef].rows.push({ rowNum: rowNum, row: row });
+        groups[groupKey].rows.push({ rowNum: rowNum, row: row });
     }
 
     // ---- Process each voucher group ----------------------------
@@ -438,10 +458,12 @@ function createLexwareManuelleUmsaetze(options) {
     var messages = [];
 
     for (var g = 0; g < groupOrder.length; g++) {
-        var ref   = groupOrder[g];
-        var group = groups[ref];
+        var groupId = groupOrder[g];
+        var group = groups[groupId];
+        var label = group.label;
         var headerRow   = group.headerRow;
         var firstRowNum = group.firstRowNum;
+        var ref = String(readCell_(headerRow, colMap, "Beleg_Ref") || "").trim();
 
         // Read voucher-level fields from header row
         var typ               = String(readCell_(headerRow, colMap, "Typ")              || "").trim().toLowerCase();
@@ -466,9 +488,9 @@ function createLexwareManuelleUmsaetze(options) {
         }
 
         // Skip inactive
-        if (aktiv === false || String(aktiv).toUpperCase() === "FALSE" || aktiv === 0) {
+        if (!isActiveRow_(aktiv)) {
             var inactiveMessage =
-                "Manuelle Umsätze: Beleg_Ref '" + ref + "' – inaktiv, übersprungen.";
+                "Manuelle Umsätze: " + label + " – inaktiv, übersprungen.";
             Logger.log(inactiveMessage);
             messages.push(inactiveMessage);
             skipped++;
