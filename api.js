@@ -555,12 +555,86 @@ function createExpenseRow_(expense) {
     ];
 
     sheet.appendRow(row);
+    var manualRowNo = sheet.getLastRow();
+    var lexwareResult = createLexwareVoucherForManualBooking_(ss, {
+        source: "pwa-manual-expense",
+        sourceRow: manualRowNo,
+        date: parsedDate,
+        category: category,
+        note: note,
+        signedAmount: round2(signedAmount),
+        taxRate: Number(expense.taxRate || 0),
+        contact: String(expense.contact || note || category || "PWA Manuelle Buchung")
+    });
 
     return {
         category: category,
         note: note,
         amount: Math.abs(round2(signedAmount)),
-        date: Utilities.formatDate(parsedDate, Session.getScriptTimeZone(), "yyyy-MM-dd")
+        date: Utilities.formatDate(parsedDate, Session.getScriptTimeZone(), "yyyy-MM-dd"),
+        lexware_voucher_id: lexwareResult.voucherId,
+        lexware_beleg_ref: lexwareResult.belegRef
+    };
+}
+
+function createLexwareVoucherForManualBooking_(ss, booking) {
+    if (typeof setupManuelleUmsaetzeSheet !== "function" ||
+        typeof getManuelleUmsaetzeSheetName_ !== "function" ||
+        typeof createLexwareManuelleUmsaetze !== "function") {
+        throw new Error("Lexware Manuelle Umsätze Funktionen sind nicht verfügbar.");
+    }
+
+    setupManuelleUmsaetzeSheet();
+
+    var lexwareSheetName = getManuelleUmsaetzeSheetName_();
+    var lexwareSheet = ss.getSheetByName(lexwareSheetName);
+    if (!lexwareSheet) {
+        throw new Error("Sheet not found: " + lexwareSheetName);
+    }
+
+    var bookingDate = booking.date instanceof Date ? booking.date : parseDateOrToday_(booking.date);
+    var signedAmount = toNumberOrZero_(booking.signedAmount);
+    var absAmount = Math.abs(round2(signedAmount));
+    if (!absAmount) {
+        throw new Error("Manuelle Lexware-Buchung ohne Betrag ist nicht zulässig.");
+    }
+
+    var belegRef = [
+        "PWA",
+        String(booking.source || "manual").replace(/[^A-Za-z0-9_-]/g, "").toUpperCase(),
+        Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyyMMdd-HHmmss"),
+        String(booking.sourceRow || lexwareSheet.getLastRow() + 1)
+    ].join("-");
+
+    lexwareSheet.appendRow([
+        belegRef,
+        signedAmount < 0 ? "purchaseinvoice" : "salesinvoice",
+        "",
+        String(booking.contact || booking.note || booking.category || "PWA Manuelle Buchung"),
+        bookingDate,
+        "",
+        belegRef,
+        String(booking.note || ""),
+        true,
+        String(booking.category || "Sonstiges"),
+        absAmount,
+        Number(booking.taxRate || 0),
+        "",
+        ""
+    ]);
+
+    var createResult = createLexwareManuelleUmsaetze({ refs: [belegRef] });
+    if (!createResult || !createResult.ok || createResult.created !== 1) {
+        var errorMessage = createResult && createResult.messages && createResult.messages.length
+            ? createResult.messages.join(" | ")
+            : (createResult && createResult.error) || "Lexware-Beleg konnte nicht erstellt werden.";
+        throw new Error(errorMessage);
+    }
+
+    var lastLexwareRow = lexwareSheet.getLastRow();
+    return {
+        belegRef: belegRef,
+        voucherId: String(lexwareSheet.getRange(lastLexwareRow, 14).getValue() || "").trim()
     };
 }
 

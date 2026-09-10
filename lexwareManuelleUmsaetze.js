@@ -294,11 +294,21 @@ function createLexwareManuellerUmsatz_(params) {
  *   - Spalte M (Zuletzt_Gebucht)  – heutiges Datum
  *   - Spalte N (Lexware_Beleg_ID) – UUID des erstellten Belegs
  *
+ * @param  {Object} [options]
+ * @param  {string[]} [options.refs] Optional: verarbeitet nur diese Beleg_Ref-Werte.
  * @return {{ok:boolean, created:number, skipped:number, errors:number}}
  */
-function createLexwareManuelleUmsaetze() {
+function createLexwareManuelleUmsaetze(options) {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     if (!ss) throw new Error("No active spreadsheet");
+    var opts = options || {};
+    var requestedRefs = Array.isArray(opts.refs) ? opts.refs : [];
+    var requestedRefSet = {};
+    for (var rf = 0; rf < requestedRefs.length; rf++) {
+        var requestedRef = String(requestedRefs[rf] || "").trim();
+        if (requestedRef) requestedRefSet[requestedRef] = true;
+    }
+    var useRefFilter = Object.keys(requestedRefSet).length > 0;
 
     // Kategorien-Sheet aktualisieren, damit findLexwarePostingCategoryId_()
     // die aktuellen UUIDs aus dem lokalen Sheet lesen kann.
@@ -361,6 +371,10 @@ function createLexwareManuelleUmsaetze() {
                 "Manuelle Umsätze: Zeile " + rowNum +
                 " – Beleg_Ref fehlt, übersprungen."
             );
+            continue;
+        }
+
+        if (useRefFilter && !requestedRefSet[belegRef]) {
             continue;
         }
 
@@ -432,10 +446,10 @@ function createLexwareManuelleUmsaetze() {
         }
 
         // Validate contact number
-        if (!kontaktnummer) {
+        if (!kontaktnummer && !kontakt) {
             var missingContactMessage =
                 "Manuelle Umsätze: Beleg_Ref '" + ref +
-                "' – Kontaktnummer fehlt, übersprungen.";
+                "' – Kontaktnummer/Kontakt fehlt, übersprungen.";
             Logger.log(missingContactMessage);
             messages.push(missingContactMessage);
             errors++;
@@ -501,16 +515,19 @@ function createLexwareManuelleUmsaetze() {
         }
 
         // ---- Look up contact (cached per Kontaktnummer) ------------
-        var contactId = contactCache[kontaktnummer];
-        if (!contactId) {
-            if (!contactIndex) contactIndex = buildLexwareContactNumberIndex_();
-            contactId = findLexwareContactIdInIndex_(kontaktnummer, contactIndex);
+        var contactId = "";
+        if (kontaktnummer) {
+            contactId = contactCache[kontaktnummer];
+            if (!contactId) {
+                if (!contactIndex) contactIndex = buildLexwareContactNumberIndex_();
+                contactId = findLexwareContactIdInIndex_(kontaktnummer, contactIndex);
+            }
+            if (!contactId) {
+                contactId = findLexwareContactIdByNumber_(kontaktnummer);
+                if (contactId) contactCache[kontaktnummer] = contactId;
+            }
         }
-        if (!contactId) {
-            contactId = findLexwareContactIdByNumber_(kontaktnummer);
-            if (contactId) contactCache[kontaktnummer] = contactId;
-        }
-        if (!contactId) {
+        if (!contactId && kontaktnummer) {
             var contactNotFoundMessage =
                 "Manuelle Umsätze: Beleg_Ref '" + ref +
                 "' – Kontaktnummer '" + kontaktnummer +
@@ -526,7 +543,8 @@ function createLexwareManuelleUmsaetze() {
             var voucherId = createLexwareManuellerUmsatz_({
                 typ:           typ,
                 contactId:     contactId,
-                kontaktnummer: kontaktnummer,
+                address:       !contactId && kontakt ? { name: kontakt } : undefined,
+                kontaktnummer: kontaktnummer || kontakt,
                 belegRef:      ref,
                 voucherDate:   voucherDateStr,
                 dueDate:       dueDateStr || undefined,
