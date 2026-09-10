@@ -529,10 +529,28 @@ function buildEuerFromMonatswerte_() {
 }
 
 function createExpenseRow_(expense) {
+    return createManualLexwareExpense_(expense || {});
+}
+
+function createManualLexwareExpense_(expense) {
     var ss = SpreadsheetApp.getActive();
-    var sheet = ss.getSheetByName("Manuelle_Buchungen");
+    if (!ss) {
+        throw new Error("No active spreadsheet");
+    }
+    if (
+        typeof setupManuelleUmsaetzeSheet !== "function" ||
+        typeof getManuelleUmsaetzeSheetName_ !== "function" ||
+        typeof createLexwareManuelleUmsaetze !== "function"
+    ) {
+        throw new Error("Lexware Manuelle Umsätze Funktionen sind nicht verfügbar.");
+    }
+
+    setupManuelleUmsaetzeSheet();
+
+    var sheetName = getManuelleUmsaetzeSheetName_();
+    var sheet = ss.getSheetByName(sheetName);
     if (!sheet) {
-        throw new Error("Sheet not found: Manuelle_Buchungen");
+        throw new Error("Sheet not found: " + sheetName);
     }
 
     var dateText = String(expense.date || "").trim();
@@ -541,27 +559,109 @@ function createExpenseRow_(expense) {
         parsedDate = new Date();
     }
 
-    var category = String(expense.category || "Sonstiges");
-    var note = String(expense.note || "Ausgabe");
+    var category = String(
+        expense.lexwareCategory || expense.kategorie || expense.category || "Sonstiges"
+    ).trim() || "Sonstiges";
+    var note = String(expense.note || expense.buchungstext || "Ausgabe").trim() || "Ausgabe";
+    var contactNumber = String(
+        expense.contactNumber ||
+        expense.kontaktnummer ||
+        expense.vendorNumber ||
+        expense.lieferantennummer ||
+        ""
+    ).trim();
+    var contactName = String(
+        expense.contact ||
+        expense.contactName ||
+        expense.kontakt ||
+        expense.guest_name ||
+        note ||
+        category ||
+        "PWA Manuelle Buchung"
+    ).trim();
+    var dueDate = parseDateOrBlank_(
+        expense.dueDate || expense.faelligkeitsdatum || expense.due_date || ""
+    );
+    var taxRate = Number(
+        expense.taxRate !== undefined
+            ? expense.taxRate
+            : (expense.mwstSatz !== undefined ? expense.mwstSatz : expense.vatRate)
+    );
+    if (isNaN(taxRate) || taxRate < 0) taxRate = 0;
     var amount = Number(expense.amount || 0);
-    var signedAmount = -Math.abs(amount);
+    var grossAmount = Math.abs(round2(amount));
+    if (!grossAmount) {
+        throw new Error("Ungültiger Betrag. Bitte eine positive Zahl eingeben.");
+    }
+
+    var nextRowNo = sheet.getLastRow() + 1;
+    var belegRef = buildPwaManualLexwareBelegRef_(nextRowNo);
+    var lexwareIdCol = MANUELLE_UMSAETZE_HEADERS.indexOf("Lexware_Beleg_ID") + 1;
 
     var row = [
-        category,
-        note,
-        "Mietenkonto",
+        belegRef,
+        "purchaseinvoice",
+        contactNumber,
+        contactName,
         parsedDate,
-        round2(signedAmount)
+        dueDate,
+        belegRef,
+        note,
+        true,
+        category,
+        grossAmount,
+        taxRate,
+        "",
+        ""
     ];
 
     sheet.appendRow(row);
+    var sheetRowNo = sheet.getLastRow();
+    var voucherId = "";
+
+    try {
+        var createResult = createLexwareManuelleUmsaetze({ refs: [belegRef] });
+        voucherId = String(sheet.getRange(sheetRowNo, lexwareIdCol).getValue() || "").trim();
+
+        if (!createResult || !createResult.ok || !voucherId) {
+            throw new Error(
+                createResult && createResult.messages && createResult.messages.length
+                    ? createResult.messages.join(" | ")
+                    : (createResult && createResult.error) || "Lexware-Beleg konnte nicht erstellt werden."
+            );
+        }
+
+        if (typeof importLexwareVoucherToSheet_ === "function") {
+            importLexwareVoucherToSheet_(voucherId);
+        } else {
+            importLexwareUmsaetze();
+        }
+
+        regenerateDerivedSheets_();
+    } catch (err) {
+        if (!voucherId) {
+            sheet.deleteRow(sheetRowNo);
+        }
+        throw err;
+    }
 
     return {
         category: category,
         note: note,
-        amount: Math.abs(round2(signedAmount)),
-        date: Utilities.formatDate(parsedDate, Session.getScriptTimeZone(), "yyyy-MM-dd")
+        amount: grossAmount,
+        date: Utilities.formatDate(parsedDate, Session.getScriptTimeZone(), "yyyy-MM-dd"),
+        lexware_voucher_id: voucherId,
+        lexware_beleg_ref: belegRef
     };
+}
+
+function buildPwaManualLexwareBelegRef_(rowNo) {
+    return [
+        "PWA",
+        "MANUAL",
+        Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyyMMdd-HHmmss"),
+        String(rowNo || "")
+    ].join("-");
 }
 
 function toNumberOrZero_(value) {
