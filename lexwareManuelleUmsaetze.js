@@ -179,9 +179,10 @@ function buildVoucherNumberRetryVariant_(voucherNumber) {
     var suffix = Utilities.formatDate(
         new Date(),
         Session.getScriptTimeZone(),
-        "yyyyMMddHHmmss"
+        "yyyyMMddHHmmssSSS"
     );
-    return [base || "VOUCHER", suffix].join("-").slice(0, 60);
+    var uuidPart = Utilities.getUuid().replace(/-/g, "").toUpperCase().slice(0, 8);
+    return [base || "VOUCHER", suffix, uuidPart].join("-").slice(0, 60);
 }
 
 function isVoucherNumberConflictError_(error) {
