@@ -172,6 +172,34 @@ function buildManuelleUmsaetzeVoucherNumber_(params) {
     return [typPart, datePart || "DATE", contactPart || "NA"].join("-").slice(0, 60);
 }
 
+function buildVoucherNumberRetryVariant_(voucherNumber) {
+    var base = String(voucherNumber || "")
+        .replace(/[^A-Za-z0-9\-_]/g, "")
+        .slice(0, 45);
+    var suffix = Utilities.formatDate(
+        new Date(),
+        Session.getScriptTimeZone(),
+        "yyyyMMddHHmmss"
+    );
+    return [base || "VOUCHER", suffix].join("-").slice(0, 60);
+}
+
+function isVoucherNumberConflictError_(error) {
+    var message = String((error && error.message) || error || "").toLowerCase();
+    var hasConflictStatus =
+        message.indexOf("failed (409)") !== -1 ||
+        message.indexOf("failed (422)") !== -1;
+    var mentionsVoucherNumber =
+        message.indexOf("vouchernumber") !== -1 ||
+        message.indexOf("belegnummer") !== -1;
+    var isDuplicateHint =
+        message.indexOf("already exists") !== -1 ||
+        message.indexOf("bereits") !== -1 ||
+        message.indexOf("duplicate") !== -1 ||
+        message.indexOf("existiert") !== -1;
+    return hasConflictStatus && mentionsVoucherNumber && isDuplicateHint;
+}
+
 // ---- Voucher creation --------------------------------------
 
 /**
@@ -202,7 +230,8 @@ function createLexwareManuellerUmsatz_(params) {
         );
     }
 
-    var voucherNumber = params.belegnummer && String(params.belegnummer).trim()
+    var hasExplicitVoucherNumber = !!(params.belegnummer && String(params.belegnummer).trim());
+    var voucherNumber = hasExplicitVoucherNumber
         ? String(params.belegnummer).trim()
         : buildManuelleUmsaetzeVoucherNumber_(params);
 
@@ -255,7 +284,22 @@ function createLexwareManuellerUmsatz_(params) {
         payload.remark = remark;
     }
 
-    var result = lexwarePostRequest_("/vouchers", payload);
+    var result;
+    try {
+        result = lexwarePostRequest_("/vouchers", payload);
+    } catch (e) {
+        if (!hasExplicitVoucherNumber && isVoucherNumberConflictError_(e)) {
+            payload.voucherNumber = buildVoucherNumberRetryVariant_(voucherNumber);
+            Logger.log(
+                "Manuelle Umsätze: Belegnummer '" + voucherNumber +
+                "' bereits vergeben, erneuter Versuch mit '" +
+                payload.voucherNumber + "'."
+            );
+            result = lexwarePostRequest_("/vouchers", payload);
+        } else {
+            throw e;
+        }
+    }
     var body = result.body;
 
     var voucherId = String(
