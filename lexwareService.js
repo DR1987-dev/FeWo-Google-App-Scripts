@@ -532,6 +532,164 @@ function lexwareGetVoucherDetail_(voucherId) {
     return lexwareRequest("/vouchers/" + encodeURIComponent(voucherId));
 }
 
+function importLexwareVoucherToSheet_(voucherId, targetSheetName) {
+    var normalizedVoucherId = String(voucherId || "").trim();
+    if (!normalizedVoucherId) {
+        throw new Error("voucherId fehlt");
+    }
+
+    var props = PropertiesService.getScriptProperties();
+    var sheetName = String(
+        targetSheetName ||
+        props.getProperty("LEXWARE_UMSAETZE_SHEET_NAME") ||
+        "Lexware Umsatz Import"
+    ).trim();
+
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) throw new Error("No active spreadsheet");
+
+    var sheet = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
+    var firstHeader = sheet.getLastRow() > 0 ? String(sheet.getRange(1, 1).getValue() || "").trim() : "";
+    if (sheet.getLastRow() === 0 || firstHeader === "ID") {
+        sheet.clearContents();
+        sheet.appendRow(LEXWARE_UMSAETZE_DETAIL_HEADERS);
+        sheet.getRange(1, 1, 1, LEXWARE_UMSAETZE_DETAIL_HEADERS.length).setFontWeight("bold");
+    }
+
+    var kontoZuordnung = buildKontoZuordnungIndex_();
+    var kategorienIndex = buildKategorienIdToNameIndex_();
+    var contactIdToVendorNumber = buildContactIdToVendorNumberIndex_();
+
+    var existingById = {};
+    var lastRow = sheet.getLastRow();
+    if (lastRow > 1) {
+        var existingData = sheet.getRange(2, 1, lastRow - 1, LEXWARE_UMSAETZE_DETAIL_HEADERS.length).getValues();
+        existingData.forEach(function (row, idx) {
+            var id = String(row[0] || "").trim();
+            if (id) existingById[id] = { rowIndex: idx + 2, data: row };
+        });
+    }
+
+    var detail = lexwareGetVoucherDetail_(normalizedVoucherId).body || {};
+    var voucherItems = Array.isArray(detail.voucherItems)
+        ? detail.voucherItems
+        : (Array.isArray(detail.lineItems) ? detail.lineItems : []);
+    if (voucherItems.length === 0) {
+        voucherItems = [{ _summaryFallback: true }];
+    }
+
+    var contact = detail.contact || {};
+    var contactName = String(
+        detail.contactName ||
+        (contact.company && contact.company.name) ||
+        [
+            contact.person && contact.person.firstName ? String(contact.person.firstName).trim() : "",
+            contact.person && contact.person.lastName ? String(contact.person.lastName).trim() : ""
+        ].join(" ").trim() ||
+        contact.displayName ||
+        contact.name ||
+        (detail.address && detail.address.name) ||
+        ""
+    ).trim();
+    var contactId = resolveLexwareContactId_(null, detail);
+    var lieferantennummer = contactId && contactIdToVendorNumber[contactId]
+        ? contactIdToVendorNumber[contactId]
+        : extractLieferantennummer_(null, detail);
+
+    var belegtyp = String(detail.voucherType || detail.type || "").trim();
+    var status = String(detail.voucherStatus || detail.status || "").trim();
+    var belegnummer = String(detail.voucherNumber || detail.documentNumber || "").trim();
+    var belegdatum = detail.voucherDate ? String(detail.voucherDate).slice(0, 10) : "";
+    var faelligkeitsdatum = detail.dueDate ? String(detail.dueDate).slice(0, 10) : "";
+    var gesamtbetrag = detail.totalAmount !== undefined
+        ? detail.totalAmount
+        : (detail.totalGrossAmount !== undefined ? detail.totalGrossAmount : "");
+    var waehrung = String(detail.currency || "EUR").trim() || "EUR";
+    var bemerkung = String(detail.remark || detail.note || "").trim();
+
+    var newRows = [];
+    var updatedCount = 0;
+
+    voucherItems.forEach(function (item, idx) {
+        var posNr = idx + 1;
+        var rowKey = normalizedVoucherId + "_" + posNr;
+
+        var categoryName = "";
+        if (!item._summaryFallback) {
+            categoryName = String(
+                item.categoryName || item.name || item.description || ""
+            ).trim();
+            if (!categoryName) {
+                var categoryId = String(item.categoryId || "").trim();
+                if (categoryId) categoryName = kategorienIndex[categoryId] || "";
+            }
+        }
+
+        var posGross = item._summaryFallback ? gesamtbetrag
+            : (item.amount !== undefined ? item.amount : "");
+        var posRate = item._summaryFallback ? ""
+            : (item.taxRatePercent !== undefined ? item.taxRatePercent : "");
+        var posTax = item._summaryFallback ? ""
+            : (item.taxAmount !== undefined ? item.taxAmount : "");
+
+        var konto = "Mietenkonto";
+        var categoryKey = categoryName ? categoryName.toLowerCase() : "";
+        if (lieferantennummer && categoryKey &&
+            kontoZuordnung.composite[lieferantennummer + "|" + categoryKey]) {
+            konto = kontoZuordnung.composite[lieferantennummer + "|" + categoryKey];
+        } else if (lieferantennummer && kontoZuordnung.vendorOnly[lieferantennummer]) {
+            konto = kontoZuordnung.vendorOnly[lieferantennummer];
+        } else if (categoryKey && kontoZuordnung.category[categoryKey]) {
+            konto = kontoZuordnung.category[categoryKey];
+        }
+
+        var row = [
+            rowKey,
+            normalizedVoucherId,
+            belegtyp,
+            status,
+            belegnummer,
+            belegdatum,
+            faelligkeitsdatum,
+            contactName,
+            lieferantennummer,
+            gesamtbetrag,
+            waehrung,
+            bemerkung,
+            posNr,
+            categoryName,
+            posGross,
+            posRate,
+            posTax,
+            konto
+        ];
+
+        if (existingById[rowKey]) {
+            var existing = existingById[rowKey].data;
+            var changed = row.some(function (val, i) { return String(val) !== String(existing[i]); });
+            if (changed) {
+                sheet.getRange(existingById[rowKey].rowIndex, 1, 1, row.length).setValues([row]);
+                updatedCount++;
+            }
+        } else {
+            newRows.push(row);
+        }
+    });
+
+    if (newRows.length > 0) {
+        sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, LEXWARE_UMSAETZE_DETAIL_HEADERS.length)
+            .setValues(newRows);
+    }
+
+    return {
+        ok: true,
+        sheet: sheetName,
+        voucherId: normalizedVoucherId,
+        inserted: newRows.length,
+        updated: updatedCount
+    };
+}
+
 /**
  * Holt alle Belege (optional gefiltert nach voucherType), ruft für jeden Beleg
  * die vollständigen Details inkl. Positionen (voucherItems) ab und schreibt
