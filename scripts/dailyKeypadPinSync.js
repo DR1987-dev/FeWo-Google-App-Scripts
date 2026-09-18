@@ -100,6 +100,18 @@ function findHeaderIndex(headers, candidates) {
     return -1;
 }
 
+function formatRowLabel(row, rowNumber, bookingRefIdx) {
+    if (bookingRefIdx < 0) return `row ${rowNumber}`;
+    const bookingRef = String(row[bookingRefIdx] ?? "").trim();
+    if (!bookingRef) return `row ${rowNumber}`;
+    return `row ${rowNumber} booking '${bookingRef}'`;
+}
+
+function hasSheetValue(value) {
+    if (value === null || value === undefined) return false;
+    return String(value).trim() !== "";
+}
+
 async function ccuGetXml(url, insecureTls) {
     const agent = url.startsWith("https://") && insecureTls
         ? new https.Agent({ rejectUnauthorized: false })
@@ -146,19 +158,48 @@ function buildPin(checkIn, checkOut) {
     return `${day}${year}${stayDays}`;
 }
 
-function decideActions(rows, checkInIdx, checkOutIdx, channelIdx, todayKey) {
+function decideActions(rows, checkInIdx, checkOutIdx, channelIdx, todayKey, bookingRefIdx = -1) {
     const actions = new Map();
+    const todaySkips = [];
 
-    for (const row of rows) {
-        const channel = normalizeChannel(row[channelIdx]);
-        if (!channel) continue;
+    for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const rowNumber = i + 2; // header is row 1
+        const rowLabel = formatRowLabel(row, rowNumber, bookingRefIdx);
 
-        const checkInDate = parseSheetDate(row[checkInIdx]);
-        const checkOutDate = parseSheetDate(row[checkOutIdx]);
-        if (!checkInDate || !checkOutDate) continue;
+        const rawCheckIn = row[checkInIdx];
+        const rawCheckOut = row[checkOutIdx];
+        const checkInDate = parseSheetDate(rawCheckIn);
+        const checkOutDate = parseSheetDate(rawCheckOut);
+        if (!checkInDate || !checkOutDate) {
+            const invalidDateParts = [];
+            if (hasSheetValue(rawCheckIn) && !checkInDate) {
+                invalidDateParts.push(`CheckIn='${String(rawCheckIn)}'`);
+            }
+            if (hasSheetValue(rawCheckOut) && !checkOutDate) {
+                invalidDateParts.push(`CheckOut='${String(rawCheckOut)}'`);
+            }
+            if (invalidDateParts.length > 0) {
+                todaySkips.push(
+                    `SKIP: ${rowLabel} has invalid date value(s): ${invalidDateParts.join(", ")}.`
+                );
+            }
+            continue;
+        }
 
         const checkInKey = asBerlinDateKey(checkInDate);
         const checkOutKey = asBerlinDateKey(checkOutDate);
+        const affectsToday = checkInKey === todayKey || checkOutKey === todayKey;
+
+        const channel = normalizeChannel(row[channelIdx]);
+        if (!channel) {
+            if (affectsToday) {
+                todaySkips.push(
+                    `SKIP: ${rowLabel} has invalid channel value '${String(row[channelIdx] ?? "")}'.`
+                );
+            }
+            continue;
+        }
 
         let candidate = null;
         if (checkOutKey === todayKey) {
@@ -187,7 +228,7 @@ function decideActions(rows, checkInIdx, checkOutIdx, channelIdx, todayKey) {
         }
     }
 
-    return actions;
+    return { actions, todaySkips };
 }
 
 async function main() {
@@ -245,6 +286,7 @@ async function main() {
     const checkInIdx = findHeaderIndex(headers, ["CheckIn", "Anreise"]);
     const checkOutIdx = findHeaderIndex(headers, ["CheckOut", "Abreise", "Checkout"]);
     const channelIdx = findHeaderIndex(headers, ["Kanal", "Channel"]);
+    const bookingRefIdx = findHeaderIndex(headers, ["Buchungsnummer", "Booking ID", "BookingID", "ID"]);
 
     if (checkInIdx < 0 || checkOutIdx < 0 || channelIdx < 0) {
         throw new Error(
@@ -253,11 +295,25 @@ async function main() {
     }
 
     const todayKey = asBerlinDateKey(new Date());
-    const actions = decideActions(rows, checkInIdx, checkOutIdx, channelIdx, todayKey);
+    const { actions, todaySkips } = decideActions(
+        rows,
+        checkInIdx,
+        checkOutIdx,
+        channelIdx,
+        todayKey,
+        bookingRefIdx
+    );
 
     if (actions.size === 0) {
         console.log(`No keypad action for today (${todayKey}).`);
+        for (const line of todaySkips) {
+            console.log(line);
+        }
         return;
+    }
+
+    for (const line of todaySkips) {
+        console.log(line);
     }
 
     const devicelistUrl = `${ccuBaseUrl}/addons/xmlapi/devicelist.cgi?sid=${encodeURIComponent(ccuSid)}`;
