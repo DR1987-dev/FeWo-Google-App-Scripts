@@ -107,6 +107,11 @@ function formatRowLabel(row, rowNumber, bookingRefIdx) {
     return `row ${rowNumber} booking '${bookingRef}'`;
 }
 
+function hasSheetValue(value) {
+    if (value === null || value === undefined) return false;
+    return String(value).trim() !== "";
+}
+
 async function ccuGetXml(url, insecureTls) {
     const agent = url.startsWith("https://") && insecureTls
         ? new https.Agent({ rejectUnauthorized: false })
@@ -162,9 +167,23 @@ function decideActions(rows, checkInIdx, checkOutIdx, channelIdx, todayKey, book
         const rowNumber = i + 2; // header is row 1
         const rowLabel = formatRowLabel(row, rowNumber, bookingRefIdx);
 
-        const checkInDate = parseSheetDate(row[checkInIdx]);
-        const checkOutDate = parseSheetDate(row[checkOutIdx]);
+        const rawCheckIn = row[checkInIdx];
+        const rawCheckOut = row[checkOutIdx];
+        const checkInDate = parseSheetDate(rawCheckIn);
+        const checkOutDate = parseSheetDate(rawCheckOut);
         if (!checkInDate || !checkOutDate) {
+            const invalidDateParts = [];
+            if (hasSheetValue(rawCheckIn) && !checkInDate) {
+                invalidDateParts.push(`CheckIn='${String(rawCheckIn)}'`);
+            }
+            if (hasSheetValue(rawCheckOut) && !checkOutDate) {
+                invalidDateParts.push(`CheckOut='${String(rawCheckOut)}'`);
+            }
+            if (invalidDateParts.length > 0) {
+                todaySkips.push(
+                    `SKIP: ${rowLabel} has invalid date value(s): ${invalidDateParts.join(", ")}.`
+                );
+            }
             continue;
         }
 
