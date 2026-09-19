@@ -16,6 +16,7 @@ jobs:
       CCU_IP: ${{ vars.CCU_IP }}
       CCU_BASE_URL: https://${{ vars.CCU_IP }}
       CCU_KEYPAD_SERIAL: ${{ vars.CCU_KEYPAD_SERIAL }}
+      CCU_KEYPAD_UPDATE_CHANNEL: ${{ vars.CCU_KEYPAD_UPDATE_CHANNEL || '5' }}
       CCU_KEYPAD_MASTER_NAME: ${{ vars.CCU_KEYPAD_MASTER_NAME || 'NUMERIC_PIN_CODE' }}
       CCU_INSECURE_TLS: ${{ vars.CCU_INSECURE_TLS || 'true' }}
       RUN_ONLY_BERLIN_HOUR: "12"
