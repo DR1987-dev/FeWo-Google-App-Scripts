@@ -158,8 +158,8 @@ function buildPin(checkIn, checkOut) {
     return `${day}${year}${stayDays}`;
 }
 
-function decideActions(rows, checkInIdx, checkOutIdx, channelIdx, todayKey, bookingRefIdx = -1) {
-    const actions = new Map();
+function decideAction(rows, checkInIdx, checkOutIdx, todayKey, bookingRefIdx = -1) {
+    let action = null;
     const todaySkips = [];
 
     for (let i = 0; i < rows.length; i++) {
@@ -189,18 +189,6 @@ function decideActions(rows, checkInIdx, checkOutIdx, channelIdx, todayKey, book
 
         const checkInKey = asBerlinDateKey(checkInDate);
         const checkOutKey = asBerlinDateKey(checkOutDate);
-        const affectsToday = checkInKey === todayKey || checkOutKey === todayKey;
-
-        const channel = normalizeChannel(row[channelIdx]);
-        if (!channel) {
-            if (affectsToday) {
-                todaySkips.push(
-                    `SKIP: ${rowLabel} has invalid channel value '${String(row[channelIdx] ?? "")}'.`
-                );
-            }
-            continue;
-        }
-
         let candidate = null;
         if (checkOutKey === todayKey) {
             candidate = {
@@ -222,13 +210,12 @@ function decideActions(rows, checkInIdx, checkOutIdx, channelIdx, todayKey, book
 
         if (!candidate) continue;
 
-        const existing = actions.get(channel);
-        if (!existing || candidate.priority > existing.priority) {
-            actions.set(channel, candidate);
+        if (!action || candidate.priority > action.priority) {
+            action = candidate;
         }
     }
 
-    return { actions, todaySkips };
+    return { action, todaySkips };
 }
 
 async function main() {
@@ -240,9 +227,15 @@ async function main() {
     const ccuSid = requiredEnv("CCU_XMLAPI_SID");
     const keypadSerial = requiredEnv("CCU_KEYPAD_SERIAL");
     const masterName = optionalEnv("CCU_KEYPAD_MASTER_NAME", "NUMERIC_PIN_CODE");
+    const keypadUpdateChannelRaw = optionalEnv("CCU_KEYPAD_UPDATE_CHANNEL", "5");
+    const keypadUpdateChannel = normalizeChannel(keypadUpdateChannelRaw);
     const insecureTls = optionalEnv("CCU_INSECURE_TLS", "true").toLowerCase() === "true";
     const runOnlyBerlinHourRaw = optionalEnv("RUN_ONLY_BERLIN_HOUR", "");
     const runOnlyBerlinHour = runOnlyBerlinHourRaw ? Number(runOnlyBerlinHourRaw) : null;
+
+    if (!keypadUpdateChannel) {
+        throw new Error(`Invalid CCU_KEYPAD_UPDATE_CHANNEL: ${keypadUpdateChannelRaw}`);
+    }
 
     if (runOnlyBerlinHour !== null) {
         const currentBerlinHour = berlinHour(new Date());
@@ -285,26 +278,24 @@ async function main() {
 
     const checkInIdx = findHeaderIndex(headers, ["CheckIn", "Anreise"]);
     const checkOutIdx = findHeaderIndex(headers, ["CheckOut", "Abreise", "Checkout"]);
-    const channelIdx = findHeaderIndex(headers, ["Kanal", "Channel"]);
     const bookingRefIdx = findHeaderIndex(headers, ["Buchungsnummer", "Booking ID", "BookingID", "ID"]);
 
-    if (checkInIdx < 0 || checkOutIdx < 0 || channelIdx < 0) {
+    if (checkInIdx < 0 || checkOutIdx < 0) {
         throw new Error(
-            `Required headers missing. Found: ${headers.join(", ")}. Need CheckIn/CheckOut/Kanal.`
+            `Required headers missing. Found: ${headers.join(", ")}. Need CheckIn/CheckOut.`
         );
     }
 
     const todayKey = asBerlinDateKey(new Date());
-    const { actions, todaySkips } = decideActions(
+    const { action, todaySkips } = decideAction(
         rows,
         checkInIdx,
         checkOutIdx,
-        channelIdx,
         todayKey,
         bookingRefIdx
     );
 
-    if (actions.size === 0) {
+    if (!action) {
         console.log(`No keypad action for today (${todayKey}).`);
         for (const line of todaySkips) {
             console.log(line);
@@ -327,60 +318,44 @@ async function main() {
         throw new Error(`No channel ise_ids found for keypad serial ${keypadSerial}`);
     }
 
-    let failures = 0;
+    const channelIseId = channelIseIds.get(keypadUpdateChannel);
+    if (!channelIseId) {
+        throw new Error(`No channel ise_id found for ${keypadSerial}:${keypadUpdateChannel}`);
+    }
 
-    for (const [channel, action] of actions.entries()) {
-        const channelIseId = channelIseIds.get(channel);
-        if (!channelIseId) {
-            console.log(`WARN: no channel ise_id for ${keypadSerial}:${channel}`);
-            failures += 1;
-            continue;
-        }
+    const updateUrl = new URL(`${ccuBaseUrl}/addons/xmlapi/mastervaluechange.cgi`);
+    updateUrl.searchParams.set("sid", ccuSid);
+    updateUrl.searchParams.set("device_id", String(channelIseId));
+    updateUrl.searchParams.set("name", masterName);
+    updateUrl.searchParams.set("value", action.pin);
 
-        const updateUrl = new URL(`${ccuBaseUrl}/addons/xmlapi/mastervaluechange.cgi`);
-        updateUrl.searchParams.set("sid", ccuSid);
-        updateUrl.searchParams.set("device_id", String(channelIseId));
-        updateUrl.searchParams.set("name", masterName);
-        updateUrl.searchParams.set("value", action.pin);
+    const updRes = await ccuGetXml(updateUrl.toString(), insecureTls);
+    if (updRes.status !== 200 || /<not_authenticated\s*\/>/i.test(updRes.body)) {
+        throw new Error(`Update failed for channel ${keypadUpdateChannel} (HTTP ${updRes.status})`);
+    }
 
-        const updRes = await ccuGetXml(updateUrl.toString(), insecureTls);
-        if (updRes.status !== 200 || /<not_authenticated\s*\/>/i.test(updRes.body)) {
-            console.log(`WARN: update failed for channel ${channel} (HTTP ${updRes.status})`);
-            failures += 1;
-            continue;
-        }
+    const verifyUrl = new URL(`${ccuBaseUrl}/addons/xmlapi/mastervalue.cgi`);
+    verifyUrl.searchParams.set("sid", ccuSid);
+    verifyUrl.searchParams.set("device_id", String(channelIseId));
 
-        const verifyUrl = new URL(`${ccuBaseUrl}/addons/xmlapi/mastervalue.cgi`);
-        verifyUrl.searchParams.set("sid", ccuSid);
-        verifyUrl.searchParams.set("device_id", String(channelIseId));
+    const verRes = await ccuGetXml(verifyUrl.toString(), insecureTls);
+    const currentValue = extractMasterValue(verRes.body, masterName);
 
-        const verRes = await ccuGetXml(verifyUrl.toString(), insecureTls);
-        const currentValue = extractMasterValue(verRes.body, masterName);
+    if (verRes.status !== 200 || /<not_authenticated\s*\/>/i.test(verRes.body)) {
+        throw new Error(`Verify auth failed for channel ${keypadUpdateChannel} (HTTP ${verRes.status})`);
+    }
 
-        if (verRes.status !== 200 || /<not_authenticated\s*\/>/i.test(verRes.body)) {
-            console.log(`WARN: verify auth failed for channel ${channel} (HTTP ${verRes.status})`);
-            failures += 1;
-            continue;
-        }
-
-        if (currentValue !== action.pin) {
-            console.log(
-                `WARN: verify mismatch for channel ${channel}. expected='${action.pin}' actual='${currentValue}' reason=${action.reason}`
-            );
-            failures += 1;
-            continue;
-        }
-
-        console.log(
-            `OK: channel ${channel} (${keypadSerial}:${channel} -> ise_id ${channelIseId}) set ${masterName} to '${action.pin}' reason=${action.reason}`
+    if (currentValue !== action.pin) {
+        throw new Error(
+            `Verify mismatch for channel ${keypadUpdateChannel}. expected='${action.pin}' actual='${currentValue}' reason=${action.reason}`
         );
     }
 
-    if (failures > 0) {
-        throw new Error(`PIN sync finished with ${failures} failure(s).`);
-    }
+    console.log(
+        `OK: channel ${keypadUpdateChannel} (${keypadSerial}:${keypadUpdateChannel} -> ise_id ${channelIseId}) set ${masterName} to '${action.pin}' reason=${action.reason}`
+    );
 
-    console.log(`PIN sync finished successfully for ${actions.size} channel action(s).`);
+    console.log("PIN sync finished successfully for 1 channel action.");
 }
 
 main().catch((err) => {
