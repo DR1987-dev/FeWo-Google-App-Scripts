@@ -12,9 +12,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {}
     env:
+      WG_INTERFACE: wg-ci
+      WG_CONFIG_PATH: /tmp/wg-ci.conf
+      WIREGUARD_ALLOWED_IPS: ${{ vars.WIREGUARD_ALLOWED_IPS || '192.168.2.0/24' }}
+      WIREGUARD_KEEPALIVE: ${{ vars.WIREGUARD_KEEPALIVE || '25' }}
       FEWO_SHEET_NAME: AlleBuchungen
       CCU_IP: ${{ vars.CCU_IP }}
-      CCU_BASE_URL: https://${{ vars.CCU_IP }}
+      CCU_SCHEME: ${{ vars.CCU_SCHEME || 'http' }}
+      CCU_BASE_URL: http://${{ vars.CCU_IP }}
       CCU_KEYPAD_SERIAL: ${{ vars.CCU_KEYPAD_SERIAL }}
       CCU_KEYPAD_UPDATE_CHANNEL: ${{ vars.CCU_KEYPAD_UPDATE_CHANNEL || '5' }}
       CCU_KEYPAD_MASTER_NAME: ${{ vars.CCU_KEYPAD_MASTER_NAME || 'NUMERIC_PIN_CODE' }}
@@ -28,6 +33,69 @@ jobs:
         with:
           node-version: 24
 
+      - name: Install WireGuard and tools
+        run: |
+          if ! command -v wg >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y wireguard iproute2 iputils-ping curl
+          fi
+
+      - name: Create temporary WireGuard config
+        env:
+          WG_PRIVATE_KEY: ${{ secrets.WIREGUARD_PRIVATE_KEY }}
+          WG_PEER_PUBLIC_KEY: ${{ vars.WIREGUARD_PEER_PUBLIC_KEY }}
+          WG_ADDRESS: ${{ vars.WIREGUARD_ADDRESS }}
+          WG_ENDPOINT: ${{ vars.WIREGUARD_ENDPOINT }}
+          WG_PRESHARED_KEY: ${{ secrets.WIREGUARD_PRESHARED_KEY }}
+          WG_DNS: ${{ vars.WIREGUARD_DNS }}
+        run: |
+          set -euo pipefail
+          umask 077
+          EFFECTIVE_WIREGUARD_ALLOWED_IPS="${WIREGUARD_ALLOWED_IPS}"
+          if printf '%s' "${WIREGUARD_ALLOWED_IPS}" | grep -Eq '(^|[[:space:]]*,[[:space:]]*)0\.0\.0\.0/0([[:space:]]*,[[:space:]]*|$)'; then
+            EFFECTIVE_WIREGUARD_ALLOWED_IPS="${CCU_IP}/32"
+            echo "::warning::WIREGUARD_ALLOWED_IPS enthaelt 0.0.0.0/0. Fuer den CI-Handshake wird stattdessen ${EFFECTIVE_WIREGUARD_ALLOWED_IPS} verwendet."
+          fi
+          {
+            echo "[Interface]"
+            echo "PrivateKey = ${WG_PRIVATE_KEY}"
+            echo "Address = ${WG_ADDRESS}"
+            echo "MTU = 1420"
+            if [ -n "${WG_DNS}" ]; then
+              echo "DNS = ${WG_DNS}"
+            fi
+            echo
+            echo "[Peer]"
+            echo "PublicKey = ${WG_PEER_PUBLIC_KEY}"
+            if [ -n "${WG_PRESHARED_KEY}" ]; then
+              echo "PresharedKey = ${WG_PRESHARED_KEY}"
+            fi
+            echo "AllowedIPs = ${EFFECTIVE_WIREGUARD_ALLOWED_IPS}"
+            echo "Endpoint = ${WG_ENDPOINT}"
+            echo "PersistentKeepalive = ${WIREGUARD_KEEPALIVE}"
+          } > "${WG_CONFIG_PATH}"
+
+      - name: Start WireGuard tunnel
+        run: |
+          set -euo pipefail
+          sudo wg-quick up "${WG_CONFIG_PATH}"
+
+      - name: Wait for WireGuard handshake
+        run: |
+          set -euo pipefail
+          echo "Warte auf WireGuard-Handshake (max. 30 Sekunden)..."
+          for i in $(seq 1 6); do
+            sleep 5
+            HANDSHAKE_TS=$(sudo wg show "${WG_INTERFACE}" latest-handshakes 2>/dev/null | awk '{print $2}')
+            if [ -n "${HANDSHAKE_TS}" ] && [ "${HANDSHAKE_TS}" != "0" ]; then
+              echo "Handshake erfolgreich nach $((i * 5)) Sekunden."
+              exit 0
+            fi
+            echo "Versuch ${i}/6: noch kein Handshake..."
+          done
+          echo "::error::Kein WireGuard-Handshake innerhalb von 30 Sekunden."
+          exit 1
+
       - run: npm ci
 
       - name: Sync keypad PIN from Google Sheet
@@ -36,3 +104,10 @@ jobs:
           FEWO_SPREADSHEET_ID: ${{ secrets.FEWO_SPREADSHEET_ID }}
           CCU_XMLAPI_SID: ${{ secrets.CCU_XMLAPI_SID }}
         run: node scripts/dailyKeypadPinSync.js
+
+      - name: Cleanup WireGuard and temporary files
+        if: always()
+        run: |
+          sudo wg-quick down "${WG_CONFIG_PATH}" >/dev/null 2>&1 || true
+          sudo ip link delete "${WG_INTERFACE}" >/dev/null 2>&1 || true
+          rm -f "${WG_CONFIG_PATH}"
