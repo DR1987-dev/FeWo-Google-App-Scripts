@@ -31,7 +31,11 @@ function berlinHour(date) {
         hour: "2-digit",
         hour12: false
     });
-    return Number(formatter.format(date));
+    const hourPart = formatter
+        .formatToParts(date)
+        .find((part) => part.type === "hour")?.value;
+    const parsedHour = Number(String(hourPart ?? "").replace(/\D/g, ""));
+    return Number.isInteger(parsedHour) ? parsedHour : NaN;
 }
 
 function parseSheetDate(value) {

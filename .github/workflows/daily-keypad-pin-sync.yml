@@ -3,7 +3,9 @@ name: Daily Keypad PIN Sync
 on:
   workflow_dispatch:
   schedule:
+    # UTC times to cover Europe/Berlin 12:07 across DST changes.
     - cron: "7 10 * * *"
+    - cron: "7 11 * * *"
 
 jobs:
   keypad-pin-sync:
@@ -22,6 +24,7 @@ jobs:
       CCU_KEYPAD_UPDATE_CHANNEL: ${{ vars.CCU_KEYPAD_UPDATE_CHANNEL || '5' }}
       CCU_KEYPAD_MASTER_NAME: ${{ vars.CCU_KEYPAD_MASTER_NAME || 'NUMERIC_PIN_CODE' }}
       CCU_INSECURE_TLS: ${{ vars.CCU_INSECURE_TLS || 'true' }}
+      RUN_ONLY_BERLIN_HOUR: "12"
 
     steps:
       - uses: actions/checkout@v4
