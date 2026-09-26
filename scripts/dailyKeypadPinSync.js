@@ -35,7 +35,7 @@ function berlinHour(date) {
         .formatToParts(date)
         .find((part) => part.type === "hour")?.value;
     const parsedHour = Number(String(hourPart ?? "").replace(/\D/g, ""));
-    return Number.isInteger(parsedHour) ? parsedHour : NaN;
+    return Number.isInteger(parsedHour) && parsedHour >= 0 && parsedHour <= 23 ? parsedHour : NaN;
 }
 
 function parseSheetDate(value) {
