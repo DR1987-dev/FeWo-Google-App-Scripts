@@ -3,7 +3,7 @@ name: Daily Keypad PIN Sync
 on:
   workflow_dispatch:
   schedule:
-    # UTC times to cover Europe/Berlin 12:00 across DST changes.
+    # UTC times to cover Europe/Berlin 12:07 across DST changes.
     - cron: "7 10 * * *"
     - cron: "7 11 * * *"
 
