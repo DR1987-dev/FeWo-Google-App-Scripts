@@ -306,8 +306,10 @@ async function main() {
     // Empty STRING values are stored/reported by the CCU as the literal two-character string ''.
     const valueToSend = action.pin === "" ? "''" : action.pin;
     updateUrl.searchParams.set("value", valueToSend);
+    // The CCU does not URL-decode %27 back to ' in this parameter, so keep apostrophes literal.
+    const updateUrlString = updateUrl.toString().replace(/%27/g, "'");
 
-    const updRes = await ccuGetXml(updateUrl.toString(), insecureTls);
+    const updRes = await ccuGetXml(updateUrlString, insecureTls);
     if (updRes.status !== 200 || /<not_authenticated\s*\/>/i.test(updRes.body)) {
         throw new Error(`Update failed for channel ${keypadUpdateChannel} (HTTP ${updRes.status})`);
     }
