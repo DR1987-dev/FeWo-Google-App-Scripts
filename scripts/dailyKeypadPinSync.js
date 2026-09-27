@@ -303,7 +303,8 @@ async function main() {
     updateUrl.searchParams.set("sid", ccuSid);
     updateUrl.searchParams.set("device_id", String(channelIseId));
     updateUrl.searchParams.set("name", masterName);
-    updateUrl.searchParams.set("value", action.pin);
+    // Empty STRING values must be sent quoted (''), otherwise the CCU treats them as "no value provided".
+    updateUrl.searchParams.set("value", action.pin === "" ? "''" : action.pin);
 
     const updRes = await ccuGetXml(updateUrl.toString(), insecureTls);
     if (updRes.status !== 200 || /<not_authenticated\s*\/>/i.test(updRes.body)) {
