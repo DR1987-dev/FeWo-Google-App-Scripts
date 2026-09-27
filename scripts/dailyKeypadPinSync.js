@@ -25,19 +25,6 @@ function asBerlinDateKey(date) {
     return formatter.format(date);
 }
 
-function berlinHour(date) {
-    const formatter = new Intl.DateTimeFormat("en-GB", {
-        timeZone: "Europe/Berlin",
-        hour: "2-digit",
-        hour12: false
-    });
-    const hourPart = formatter
-        .formatToParts(date)
-        .find((part) => part.type === "hour")?.value;
-    const parsedHour = Number(String(hourPart ?? "").replace(/\D/g, ""));
-    return Number.isInteger(parsedHour) && parsedHour >= 0 && parsedHour <= 23 ? parsedHour : NaN;
-}
-
 function parseSheetDate(value) {
     if (value === null || value === undefined || value === "") return null;
 
@@ -234,24 +221,9 @@ async function main() {
     const keypadUpdateChannelRaw = optionalEnv("CCU_KEYPAD_UPDATE_CHANNEL", "5");
     const keypadUpdateChannel = normalizeChannel(keypadUpdateChannelRaw);
     const insecureTls = optionalEnv("CCU_INSECURE_TLS", "true").toLowerCase() === "true";
-    const runOnlyBerlinHourRaw = optionalEnv("RUN_ONLY_BERLIN_HOUR", "");
-    const runOnlyBerlinHour = runOnlyBerlinHourRaw ? Number(runOnlyBerlinHourRaw) : null;
 
     if (!keypadUpdateChannel) {
         throw new Error(`Invalid CCU_KEYPAD_UPDATE_CHANNEL: ${keypadUpdateChannelRaw}`);
-    }
-
-    if (runOnlyBerlinHour !== null) {
-        const currentBerlinHour = berlinHour(new Date());
-        if (!Number.isInteger(runOnlyBerlinHour) || runOnlyBerlinHour < 0 || runOnlyBerlinHour > 23) {
-            throw new Error(`Invalid RUN_ONLY_BERLIN_HOUR: ${runOnlyBerlinHourRaw}`);
-        }
-        if (currentBerlinHour !== runOnlyBerlinHour) {
-            console.log(
-                `Skip run: current Berlin hour is ${currentBerlinHour}, required ${runOnlyBerlinHour}.`
-            );
-            return;
-        }
     }
 
     const serviceAccountJson = requiredEnv("GOOGLE_SERVICE_ACCOUNT");
@@ -349,7 +321,11 @@ async function main() {
         throw new Error(`Verify auth failed for channel ${keypadUpdateChannel} (HTTP ${verRes.status})`);
     }
 
-    if (currentValue !== action.pin) {
+    // CCU XML-API quirk: mastervalue.cgi reports value="string" (the type name) instead of value=""
+    // for STRING-type master values that were just cleared to an empty string.
+    const isClearedStringQuirk = action.pin === "" && currentValue === "string";
+
+    if (currentValue !== action.pin && !isClearedStringQuirk) {
         throw new Error(
             `Verify mismatch for channel ${keypadUpdateChannel}. expected='${action.pin}' actual='${currentValue}' reason=${action.reason}`
         );
