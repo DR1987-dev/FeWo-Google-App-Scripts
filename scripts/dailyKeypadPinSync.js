@@ -303,8 +303,9 @@ async function main() {
     updateUrl.searchParams.set("sid", ccuSid);
     updateUrl.searchParams.set("device_id", String(channelIseId));
     updateUrl.searchParams.set("name", masterName);
-    // Empty STRING values must be sent quoted (''), otherwise the CCU treats them as "no value provided".
-    updateUrl.searchParams.set("value", action.pin === "" ? "''" : action.pin);
+    // Empty STRING values are stored/reported by the CCU as the literal two-character string ''.
+    const valueToSend = action.pin === "" ? "''" : action.pin;
+    updateUrl.searchParams.set("value", valueToSend);
 
     const updRes = await ccuGetXml(updateUrl.toString(), insecureTls);
     if (updRes.status !== 200 || /<not_authenticated\s*\/>/i.test(updRes.body)) {
@@ -322,13 +323,9 @@ async function main() {
         throw new Error(`Verify auth failed for channel ${keypadUpdateChannel} (HTTP ${verRes.status})`);
     }
 
-    // CCU XML-API quirk: mastervalue.cgi reports value="string" (the type name) instead of value=""
-    // for STRING-type master values that were just cleared to an empty string.
-    const isClearedStringQuirk = action.pin === "" && currentValue === "string";
-
-    if (currentValue !== action.pin && !isClearedStringQuirk) {
+    if (currentValue !== valueToSend) {
         throw new Error(
-            `Verify mismatch for channel ${keypadUpdateChannel}. expected='${action.pin}' actual='${currentValue}' reason=${action.reason}`
+            `Verify mismatch for channel ${keypadUpdateChannel}. expected='${valueToSend}' actual='${currentValue}' reason=${action.reason}`
         );
     }
 
