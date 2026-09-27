@@ -319,7 +319,9 @@ async function main() {
     verifyUrl.searchParams.set("device_id", String(channelIseId));
 
     const verRes = await ccuGetXml(verifyUrl.toString(), insecureTls);
-    const currentValue = extractMasterValue(verRes.body, masterName);
+    const rawCurrentValue = extractMasterValue(verRes.body, masterName);
+    // The CCU percent-encodes characters like ' in the XML attribute value (e.g. %27), so decode before comparing.
+    const currentValue = rawCurrentValue !== null ? decodeURIComponent(rawCurrentValue) : rawCurrentValue;
 
     if (verRes.status !== 200 || /<not_authenticated\s*\/>/i.test(verRes.body)) {
         throw new Error(`Verify auth failed for channel ${keypadUpdateChannel} (HTTP ${verRes.status})`);
