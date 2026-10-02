@@ -21,6 +21,7 @@ jobs:
     env:
       WG_INTERFACE: wg-ci
       WG_CONFIG_PATH: /tmp/wg-ci.conf
+      WG_ROOT_CONFIG_PATH: /etc/wireguard/wg-ci.conf
       CCU_IP: ${{ vars.CCU_IP }}
       # AllowedIPs: Nur Heimnetz routen, kein Default-Route-Hijack.
       # Wert kann ueber GitHub Variable WIREGUARD_ALLOWED_IPS ueberschrieben werden.
@@ -231,11 +232,12 @@ jobs:
             echo "Endpoint = ${WG_ENDPOINT}"
             echo "PersistentKeepalive = ${WIREGUARD_KEEPALIVE}"
           } > "${WG_CONFIG_PATH}"
+          sudo install -m 600 "${WG_CONFIG_PATH}" "${WG_ROOT_CONFIG_PATH}"
 
       - name: Start WireGuard tunnel
         run: |
           set -euo pipefail
-          if sudo wg-quick up "${WG_CONFIG_PATH}"; then
+          if sudo wg-quick up "${WG_ROOT_CONFIG_PATH}"; then
             echo "WG_STATUS=OK" >> "$GITHUB_ENV"
           else
             echo "WG_STATUS=FEHLER" >> "$GITHUB_ENV"
@@ -1155,6 +1157,7 @@ jobs:
         run: |
           set +e
           if ip link show "${WG_INTERFACE}" >/dev/null 2>&1; then
-            sudo wg-quick down "${WG_CONFIG_PATH}" || true
+            sudo wg-quick down "${WG_ROOT_CONFIG_PATH}" || true
           fi
+          sudo rm -f "${WG_ROOT_CONFIG_PATH}"
           rm -f "${WG_CONFIG_PATH}"

@@ -13,6 +13,7 @@ jobs:
     env:
       WG_INTERFACE: wg-ci
       WG_CONFIG_PATH: /tmp/wg-ci.conf
+      WG_ROOT_CONFIG_PATH: /etc/wireguard/wg-ci.conf
       WIREGUARD_ALLOWED_IPS: ${{ vars.WIREGUARD_ALLOWED_IPS || '192.168.2.0/24' }}
       WIREGUARD_KEEPALIVE: ${{ vars.WIREGUARD_KEEPALIVE || '25' }}
       FEWO_SHEET_NAME: AlleBuchungen
@@ -72,11 +73,12 @@ jobs:
             echo "Endpoint = ${WG_ENDPOINT}"
             echo "PersistentKeepalive = ${WIREGUARD_KEEPALIVE}"
           } > "${WG_CONFIG_PATH}"
+          sudo install -m 600 "${WG_CONFIG_PATH}" "${WG_ROOT_CONFIG_PATH}"
 
       - name: Start WireGuard tunnel
         run: |
           set -euo pipefail
-          sudo wg-quick up "${WG_CONFIG_PATH}"
+          sudo wg-quick up "${WG_ROOT_CONFIG_PATH}"
 
       - name: Wait for WireGuard handshake
         run: |
@@ -106,6 +108,7 @@ jobs:
       - name: Cleanup WireGuard and temporary files
         if: always()
         run: |
-          sudo wg-quick down "${WG_CONFIG_PATH}" >/dev/null 2>&1 || true
+          sudo wg-quick down "${WG_ROOT_CONFIG_PATH}" >/dev/null 2>&1 || true
           sudo ip link delete "${WG_INTERFACE}" >/dev/null 2>&1 || true
+          sudo rm -f "${WG_ROOT_CONFIG_PATH}"
           rm -f "${WG_CONFIG_PATH}"
