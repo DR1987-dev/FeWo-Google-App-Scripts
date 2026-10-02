@@ -8,7 +8,7 @@ on:
 
 jobs:
   keypad-pin-sync:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions: {}
     env:
       WG_INTERFACE: wg-ci
