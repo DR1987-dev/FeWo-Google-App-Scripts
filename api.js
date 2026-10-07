@@ -2,7 +2,33 @@ function onOpen() {
     SpreadsheetApp.getUi()
         .createMenu("FeWo Tools")
         .addItem("Ausgabe erfassen", "addAusgabeFromSheet")
+        .addItem("Lexware-Fixkosten erzeugen", "runLexwareFixkostenManually")
         .addToUi();
+}
+
+function runLexwareFixkostenManually() {
+    var ui = SpreadsheetApp.getUi();
+    var confirmation = ui.alert(
+        "Lexware-Fixkosten erzeugen",
+        "Fällige Fixkosten-Belege jetzt in Lexware erstellen? Bereits gebuchte Einträge werden übersprungen.",
+        ui.ButtonSet.YES_NO
+    );
+    if (confirmation !== ui.Button.YES) return;
+
+    try {
+        var result = createLexwareFixkosten();
+        var message = "Erstellt: " + result.created +
+            "\nÜbersprungen: " + result.skipped +
+            "\nFehler: " + result.errors;
+        if (result.error) message += "\n\n" + result.error;
+        ui.alert("Lexware-Fixkosten abgeschlossen", message, ui.ButtonSet.OK);
+    } catch (err) {
+        ui.alert(
+            "Fehler beim Erzeugen der Lexware-Fixkosten",
+            String(err && err.message ? err.message : err),
+            ui.ButtonSet.OK
+        );
+    }
 }
 
 function addAusgabeFromSheet() {
