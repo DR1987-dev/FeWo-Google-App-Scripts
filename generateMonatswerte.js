@@ -1,4 +1,4 @@
-function generateMonatswerte() {
+function generateMonatswerte(onlyMissing) {
   const ss = SpreadsheetApp.getActive();
   const sourceSheet = ss.getSheetByName("AlleBuchungenPlan");
   if (!sourceSheet) throw new Error("❌ AlleBuchungenPlan nicht gefunden");
@@ -7,7 +7,7 @@ function generateMonatswerte() {
   let targetSheet = ss.getSheetByName(targetName);
   if (!targetSheet) {
     targetSheet = ss.insertSheet(targetName);
-  } else {
+  } else if (!onlyMissing) {
     targetSheet.clear();
   }
 
@@ -98,9 +98,44 @@ function generateMonatswerte() {
       ]);
     });
 
-  targetSheet
-    .getRange(1, 1, output.length, output[0].length)
-    .setValues(output);
+  if (onlyMissing) {
+    let lastTargetRow = targetSheet.getLastRow();
+    const existingKeys = {};
 
-  Logger.log("✅ Monatswerte korrekt geschrieben: " + (output.length - 1));
+    if (lastTargetRow === 0) {
+      targetSheet.getRange(1, 1, 1, output[0].length).setValues([output[0]]);
+      lastTargetRow = 1;
+    } else if (lastTargetRow > 1) {
+      targetSheet.getRange(2, 1, lastTargetRow - 1, 3).getValues().forEach(row => {
+        const key = String(row[0] || "").trim() + "|" +
+          String(row[1] || "").trim().padStart(2, "0") + "|" +
+          String(row[2] || "").trim();
+        existingKeys[key] = true;
+      });
+    }
+
+    const missingRows = output.slice(1).filter(row => {
+      const key = String(row[0]) + "|" + String(row[1]).padStart(2, "0") + "|" + String(row[2]);
+      return !existingKeys[key];
+    });
+
+    if (missingRows.length > 0) {
+      targetSheet
+        .getRange(lastTargetRow + 1, 1, missingRows.length, output[0].length)
+        .setValues(missingRows);
+    }
+    Logger.log("✅ Fehlende Monatswerte ergänzt: " + missingRows.length);
+  } else {
+    targetSheet
+      .getRange(1, 1, output.length, output[0].length)
+      .setValues(output);
+    Logger.log("✅ Monatswerte korrekt geschrieben: " + (output.length - 1));
+  }
+
+}
+
+function generateMonatswerteNachtraeglich() {
+  Logger.log("🔄 Erzeuge fehlende Monatswerte aus den aktuellen Buchungen.");
+  generateAlleBuchungenPlan();
+  generateMonatswerte(true);
 }
