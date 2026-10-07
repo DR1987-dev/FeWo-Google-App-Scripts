@@ -13,7 +13,7 @@
 //  Spalte A  Kategorie          – Buchungskategoriename aus Lexware (name, z. B. "Reise MA")
 //  Spalte B  Lieferant          – Anzeigename (nur zur Übersicht, kein API-Lookup)
 //  Spalte C  Lieferantennummer  – Kundennummer des Lieferanten in Lexware (contactNumber)
-//  Spalte D  Betrag_Brutto      – Bruttobetrag in EUR (Zahl, z. B. 142.80)
+//  Spalte D  Betrag_Brutto      – Bruttobetrag in EUR (Zahl oder lokalisierter Text)
 //  Spalte E  MwSt_Satz          – Steuersatz in % (0, 7 oder 19)
 //  Spalte F  Rhythmus           – monatlich | quartalsweise | jährlich
 //  Spalte G  Fälligkeitstag     – Tag im Monat (1–31); wird auf den letzten Tag des
@@ -270,6 +270,31 @@ function formatDate_(d) {
     var m = String(d.getMonth() + 1).padStart(2, "0");
     var day = String(d.getDate()).padStart(2, "0");
     return y + "-" + m + "-" + day;
+}
+
+function parseFixkostenAmount_(value) {
+    if (typeof value === "number") return isFinite(value) ? value : null;
+
+    var amount = String(value == null ? "" : value)
+        .replace(/[€\s\u00a0]/g, "")
+        .trim();
+    if (!amount) return null;
+
+    var commaIndex = amount.lastIndexOf(",");
+    var dotIndex = amount.lastIndexOf(".");
+    if (commaIndex >= 0 && dotIndex >= 0) {
+        if (commaIndex > dotIndex) {
+            amount = amount.replace(/\./g, "").replace(",", ".");
+        } else {
+            amount = amount.replace(/,/g, "");
+        }
+    } else if (commaIndex >= 0) {
+        amount = amount.replace(",", ".");
+    }
+
+    if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(amount)) return null;
+    var parsed = Number(amount);
+    return isFinite(parsed) ? parsed : null;
 }
 
 function buildFixkostenVoucherNumber_(params) {
@@ -774,7 +799,7 @@ function createLexwareFixkosten() {
         var kategorieName     = String(readCell_(row, colMap, "Kategorie", "Kategorie_Nr")       || "").trim();
         var lieferant         = String(readCell_(row, colMap, "Lieferant")                       || "").trim();
         var lieferantennummer = String(readCell_(row, colMap, "Lieferantennummer", "Lieferant")  || "").trim();
-        var betragBrutto      = Number(readCell_(row, colMap, "Betrag_Brutto"))                  || 0;
+        var betragBrutto      = parseFixkostenAmount_(readCell_(row, colMap, "Betrag_Brutto"));
         var mwstSatz          = Number(readCell_(row, colMap, "MwSt_Satz"))                      || 0;
         var rhythmus          = String(readCell_(row, colMap, "Rhythmus")                        || "").trim();
         var faelligkeitstag   = readCell_(row, colMap, "Fälligkeitstag");
@@ -805,7 +830,7 @@ function createLexwareFixkosten() {
             skipped++;
             continue;
         }
-        if (!betragBrutto || betragBrutto <= 0) {
+        if (betragBrutto === null || betragBrutto <= 0) {
             Logger.log("Fixkosten: Zeile " + rowNum + " (Kat. " + kategorieName + ") – Betrag fehlt oder 0, übersprungen.");
             skipped++;
             continue;
