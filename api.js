@@ -7,27 +7,19 @@ function onOpen() {
 }
 
 function runLexwareFixkostenManually() {
-    var ui = SpreadsheetApp.getUi();
-    var confirmation = ui.alert(
-        "Lexware-Fixkosten erzeugen",
-        "Fällige Fixkosten-Belege jetzt in Lexware erstellen? Bereits gebuchte Einträge werden übersprungen.",
-        ui.ButtonSet.YES_NO
-    );
-    if (confirmation !== ui.Button.YES) return;
-
     try {
         var result = createLexwareFixkosten();
         var message = "Erstellt: " + result.created +
-            "\nÜbersprungen: " + result.skipped +
-            "\nFehler: " + result.errors;
-        if (result.error) message += "\n\n" + result.error;
-        ui.alert("Lexware-Fixkosten abgeschlossen", message, ui.ButtonSet.OK);
+            " | Übersprungen: " + result.skipped +
+            " | Fehler: " + result.errors;
+        if (result.error) message += " | " + result.error;
+        Logger.log("Lexware-Fixkosten abgeschlossen: " + message);
+        try {
+            SpreadsheetApp.getActiveSpreadsheet().toast(message, "Lexware-Fixkosten abgeschlossen", 10);
+        } catch (e) {}
     } catch (err) {
-        ui.alert(
-            "Fehler beim Erzeugen der Lexware-Fixkosten",
-            String(err && err.message ? err.message : err),
-            ui.ButtonSet.OK
-        );
+        Logger.log("Fehler beim Erzeugen der Lexware-Fixkosten: " + String(err && err.message ? err.message : err));
+        throw err;
     }
 }
 
