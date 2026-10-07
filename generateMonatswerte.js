@@ -104,3 +104,9 @@ function generateMonatswerte() {
 
   Logger.log("✅ Monatswerte korrekt geschrieben: " + (output.length - 1));
 }
+
+function generateMonatswerteNachtraeglich() {
+  Logger.log("🔄 Erzeuge fehlende Monatswerte aus den aktuellen Buchungen.");
+  generateAlleBuchungenPlan();
+  generateMonatswerte();
+}
