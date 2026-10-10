@@ -3,7 +3,6 @@ function runAll() {
     importLodgifyEinnahmenToImport();
     importLexwareAll();
     processLodgifyInvoiceUploadToLexware();
-    createLexwareFixkosten();
     var manuelleUmsaetzeResult = createLexwareManuelleUmsaetze();
     if (manuelleUmsaetzeResult && manuelleUmsaetzeResult.ok === false) {
       throw new Error(
