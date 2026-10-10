@@ -532,6 +532,35 @@ function lexwareGetVoucherDetail_(voucherId) {
     return lexwareRequest("/vouchers/" + encodeURIComponent(voucherId));
 }
 
+/**
+ * Ruft eine Seite der Lexware-Dauerbelege ab.
+ *
+ * @param {number} page 0-basierter Seitenindex.
+ * @param {number} pageSize Anzahl der Einträge pro Seite.
+ * @return {{status:number, body:*}}
+ */
+function lexwareGetRecurringTemplates_(page, pageSize) {
+    return lexwareRequest("/recurring-templates", {
+        page: page || 0,
+        size: pageSize || 100,
+        sort: "updatedDate,DESC"
+    });
+}
+
+/**
+ * Ruft die vollständigen Details eines Lexware-Dauerbelegs ab.
+ *
+ * @param {string} templateId Lexware-UUID des Dauerbelegs.
+ * @return {{status:number, body:*}}
+ */
+function lexwareGetRecurringTemplateDetail_(templateId) {
+    var normalizedTemplateId = String(templateId || "").trim();
+    if (!normalizedTemplateId) {
+        throw new Error("Dauerbeleg-ID fehlt");
+    }
+    return lexwareRequest("/recurring-templates/" + encodeURIComponent(normalizedTemplateId));
+}
+
 function importLexwareVoucherToSheet_(voucherId, targetSheetName) {
     var normalizedVoucherId = String(voucherId || "").trim();
     if (!normalizedVoucherId) {

@@ -23,78 +23,145 @@ function generateAlleBuchungenPlan() {
     return isNaN(n) ? 0 : Number(n.toFixed(2));
   }
 
-  function istDatumImZeitraum(datum, start, ende) {
-    if (!start) return false;
-    if (datum < start) return false;
-    if (ende && datum > ende) return false;
-    return true;
-  }
-
-  function passtZumMonatsIntervall(importDatum, startDatum, wertstellungstag, toleranzTage = 3) {
-    const diffMonate =
-      (importDatum.getFullYear() - startDatum.getFullYear()) * 12 +
-      (importDatum.getMonth() - startDatum.getMonth());
-
-    if (diffMonate < 0) return false;
-
-    const erwartetesDatum = new Date(startDatum);
-    erwartetesDatum.setMonth(startDatum.getMonth() + diffMonate);
-
-    if (wertstellungstag) {
-      erwartetesDatum.setDate(wertstellungstag);
+  function parseDateOrNull(value, fieldName) {
+    if (!value) return null;
+    const date = new Date(value);
+    if (isNaN(date.getTime())) {
+      throw new Error(`❌ Ungültiges Datum in Feld '${fieldName}': ${value}`);
     }
-
-    const diffTage = Math.abs(
-      (importDatum - erwartetesDatum) / (1000 * 60 * 60 * 24)
-    );
-
-    Logger.log(
-      `🧮 Intervallprüfung: erwartet=${Utilities.formatDate(erwartetesDatum, Session.getScriptTimeZone(), "yyyy-MM-dd")}, ` +
-      `import=${Utilities.formatDate(importDatum, Session.getScriptTimeZone(), "yyyy-MM-dd")}, diff=${diffTage}`
-    );
-
-    return diffTage <= toleranzTage;
+    return date;
   }
 
-  function findePassendeFixkosten(importBuchung, fixkostenListe) {
-    Logger.log(
-      `🔎 Suche Fixkosten für '${importBuchung.Buchungstext}' am ${Utilities.formatDate(
-        importBuchung.Datum,
-        Session.getScriptTimeZone(),
-        "yyyy-MM-dd"
-      )}`
-    );
+  function recurringIntervalMonths(interval) {
+    const normalized = String(interval || "").toUpperCase();
+    if (normalized === "MONTHLY") return 1;
+    if (normalized === "QUARTERLY") return 3;
+    if (normalized === "SEMIANNUALLY" || normalized === "HALF_YEARLY") return 6;
+    if (normalized === "YEARLY" || normalized === "ANNUALLY") return 12;
+    throw new Error(`❌ Nicht unterstütztes Dauerbeleg-Intervall: ${interval}`);
+  }
 
-    const kandidaten = fixkostenListe.filter(f => {
-      if (f.BuchungstextAbgleich !== importBuchung.Buchungstext) return false;
+  function resolveRecurringAccount(vendorNumber, category, kontoZuordnung) {
+    const vendor = String(vendorNumber || "").trim();
+    const categoryKey = String(category || "").trim().toLowerCase();
+    if (vendor && categoryKey && kontoZuordnung.composite[vendor + "|" + categoryKey]) {
+      return kontoZuordnung.composite[vendor + "|" + categoryKey];
+    }
+    if (vendor && kontoZuordnung.vendorOnly[vendor]) {
+      return kontoZuordnung.vendorOnly[vendor];
+    }
+    if (categoryKey && kontoZuordnung.category[categoryKey]) {
+      return kontoZuordnung.category[categoryKey];
+    }
+    return "Mietenkonto";
+  }
 
-      if (!istDatumImZeitraum(importBuchung.Datum, f.Startdatum, f.Enddatum)) {
-        return false;
-      }
+  function findePassendesDauerbeleg(importBuchung, dauerbelege) {
+    const kandidaten = dauerbelege.filter(dauerbeleg => {
+      if (dauerbeleg.BuchungstextAbgleich !== importBuchung.Buchungstext) return false;
+      if (dauerbeleg.Startdatum && importBuchung.Datum < dauerbeleg.Startdatum) return false;
+      if (dauerbeleg.Enddatum && importBuchung.Datum > dauerbeleg.Enddatum) return false;
 
-      if (f.Intervall && f.Intervall.toLowerCase() === "monat") {
-        return passtZumMonatsIntervall(
-          importBuchung.Datum,
-          f.Startdatum,
-          f.Wertstellungstag
+      const diffMonate =
+        (importBuchung.Datum.getFullYear() - dauerbeleg.Startdatum.getFullYear()) * 12 +
+        (importBuchung.Datum.getMonth() - dauerbeleg.Startdatum.getMonth());
+      if (diffMonate < 0 || diffMonate % dauerbeleg.IntervallMonate !== 0) return false;
+
+      const erwartetesDatum = new Date(dauerbeleg.Startdatum);
+      erwartetesDatum.setMonth(
+        dauerbeleg.Startdatum.getMonth() + diffMonate
+      );
+      const diffTage = Math.abs(
+        (importBuchung.Datum - erwartetesDatum) / (1000 * 60 * 60 * 24)
+      );
+      return diffTage <= 3;
+    });
+
+    kandidaten.sort((a, b) => b.Startdatum - a.Startdatum);
+    return kandidaten[0] || null;
+  }
+
+  function loadLexwareDauerbelege() {
+    const kontoZuordnung = buildKontoZuordnungIndex_();
+    const contactIdToVendorNumber = buildContactIdToVendorNumberIndex_();
+    const dauerbelege = [];
+    const pageSize = 100;
+    let page = 0;
+    let totalPages = 1;
+
+    do {
+      const result = lexwareGetRecurringTemplates_(page, pageSize);
+      const body = result.body;
+      if (!body || !Array.isArray(body.content)) {
+        throw new Error(
+          `❌ Unerwartete Antwort von Lexware-Dauerbelegen auf Seite ${page}: ${JSON.stringify(body)}`
         );
       }
 
-      return true;
-    });
+      totalPages = body.totalPages !== undefined
+        ? body.totalPages
+        : (body.page && body.page.totalPages !== undefined ? body.page.totalPages : 1);
 
-    Logger.log(`📌 Gefundene Fixkosten-Kandidaten: ${kandidaten.length}`);
+      body.content.forEach(templateSummary => {
+        const templateId = String(templateSummary.id || "").trim();
+        if (!templateId) return;
 
-    if (kandidaten.length === 0) return null;
+        const detail = lexwareGetRecurringTemplateDetail_(templateId).body || {};
+        if (detail.archived) return;
 
-    // 👉 Wichtig: den zeitlich neuesten Start nehmen
-    kandidaten.sort((a, b) => b.Startdatum - a.Startdatum);
+        const settings = detail.recurringTemplateSettings || templateSummary.recurringTemplateSettings || {};
+        const status = String(settings.executionStatus || "").toUpperCase();
+        if (status === "PAUSED" || status === "INACTIVE" || status === "ARCHIVED") return;
 
-    Logger.log(
-      `✅ Verwendeter Fixkosten-Eintrag: ${kandidaten[0].Kostenart} → ${kandidaten[0].Buchungskonto}`
-    );
+        const startDate = parseDateOrNull(settings.startDate, `Dauerbeleg ${templateId}.startDate`);
+        if (!startDate) {
+          throw new Error(`❌ Dauerbeleg '${templateId}' hat kein Startdatum`);
+        }
+        const endDate = parseDateOrNull(settings.endDate, `Dauerbeleg ${templateId}.endDate`);
+        const intervalMonths = recurringIntervalMonths(settings.executionInterval);
+        const address = detail.address || templateSummary.address || {};
+        const vendorNumber = address.contactId
+          ? contactIdToVendorNumber[String(address.contactId).trim()] || ""
+          : "";
+        const lineItems = Array.isArray(detail.lineItems) && detail.lineItems.length
+          ? detail.lineItems
+          : [{
+              name: detail.title || templateSummary.title || address.name || "Dauerbeleg",
+              lineItemAmount: detail.totalPrice && detail.totalPrice.totalGrossAmount
+            }];
 
-    return kandidaten[0];
+        lineItems.forEach((item, index) => {
+          const category = String(item.name || item.description || detail.title || address.name || "Dauerbeleg").trim();
+          const amount = Number(
+            item.lineItemAmount !== undefined
+              ? item.lineItemAmount
+              : (item.unitPrice && item.unitPrice.grossAmount !== undefined
+                ? Number(item.unitPrice.grossAmount) * Number(item.quantity || 1)
+                : 0)
+          );
+          if (!isFinite(amount) || amount === 0) {
+            throw new Error(
+              `❌ Dauerbeleg '${templateId}', Position ${index + 1} hat keinen gültigen Betrag`
+            );
+          }
+
+          dauerbelege.push({
+            Kostenart: category,
+            BuchungstextAbgleich: category,
+            Betrag: -Math.abs(Number(amount.toFixed(2))),
+            Startdatum: startDate,
+            Enddatum: endDate,
+            IntervallMonate: intervalMonths,
+            Buchungskonto: resolveRecurringAccount(vendorNumber, category, kontoZuordnung)
+          });
+        });
+      });
+
+      page++;
+    } while (page < totalPages);
+
+    Logger.log(`📌 Lexware-Dauerbelege geladen: ${dauerbelege.length} Position(en)`);
+    return dauerbelege;
   }
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -103,7 +170,6 @@ function generateAlleBuchungenPlan() {
   }
 
   // Sheets
-  const sheetFixkosten = requireSheet(ss, "Fixkosten");
   const sheetImport = requireSheet(ss, "Import");
   const sheetImportZuordnung = requireSheet(ss, "Import_Konto_Zuordnung");
   const sheetManuelle = requireSheet(ss, "Manuelle_Buchungen");
@@ -115,20 +181,8 @@ function generateAlleBuchungenPlan() {
   sheetOutput.appendRow(["Kostenart", "Buchungskonto", "Datum", "Betrag", "Kumuliert", "Monatsstartwert", "Monatsendwert"]);
 
   // -------------------------------
-  // 1️⃣ Fixkosten laden
-  const fixkostenData = sheetFixkosten.getDataRange().getValues().slice(1);
-  const fixkosten = fixkostenData.map(r => ({
-    Kostenart: r[0],
-    Kategorie: r[1],
-    Betrag: parseFloat(r[2]),
-    Startdatum: r[3] ? new Date(r[3]) : null,
-    Enddatum: r[4] ? new Date(r[4]) : null,
-    BuchungstextAbgleich: r[5],
-    Wertstellungstag: r[6] || null,
-    Intervall: r[7],
-    Buchungskonto: r[8]
-  }));
-  Logger.log(`📌 Fixkosten geladen: ${fixkosten.length}`);
+  // 1️⃣ Lexware-Dauerbelege laden
+  const dauerbelege = loadLexwareDauerbelege();
 
   // -------------------------------
   // 2️⃣ Import-Zuordnungen
@@ -200,7 +254,6 @@ function generateAlleBuchungenPlan() {
   // 5b️⃣ Lexware Umsatz Import (ab 2026) – eine Zeile pro Position mit vorberechnetem Konto
   const START_2026 = new Date(2026, 0, 1);
   let lexwareUmsaetze = [];
-  let letztesDatumLexware = null;
 
   const sheetLexwareUmsaetze = ss.getSheetByName("Lexware Umsatz Import");
   if (sheetLexwareUmsaetze) {
@@ -237,19 +290,12 @@ function generateAlleBuchungenPlan() {
         Buchungskonto: konto
       });
 
-      if (!letztesDatumLexware || belegdatum > letztesDatumLexware) {
-        letztesDatumLexware = belegdatum;
-      }
-
       Logger.log(
         `📦 Lexware Umsatz Import ${i + 2}: "${kostenart}", Typ=${belegtyp}, Betrag=${betrag}, Konto=${konto}`
       );
     });
     Logger.log(
-      `📌 Lexware Umsatz Import geladen: ${lexwareUmsaetze.length}, letztes Datum: ` +
-      (letztesDatumLexware
-        ? Utilities.formatDate(letztesDatumLexware, Session.getScriptTimeZone(), "yyyy-MM-dd")
-        : "–")
+      `📌 Lexware Umsatz Import geladen: ${lexwareUmsaetze.length}`
     );
   }
 
@@ -277,20 +323,18 @@ function generateAlleBuchungenPlan() {
       return;
     }
 
-    // Abgleich mit Fixkosten innerhalb Start- und Enddatum ±3 Tage
-    let konto = "Mietenkonto"; // Fallback IMMER
+    let konto = "Mietenkonto";
 
-    // 1️⃣ Fixkosten-Abgleich (zeitlich + Intervall)
-    const fix = findePassendeFixkosten(imp, fixkosten);
-
-    if (fix) {
-      konto = fix.Buchungskonto;
+    // Dauerbeleg-Zuordnung als Ersatz für die frühere Fixkosten-Zuordnung.
+    const dauerbeleg = findePassendesDauerbeleg(imp, dauerbelege);
+    if (dauerbeleg) {
+      konto = dauerbeleg.Buchungskonto;
       Logger.log(
-        `🔁 Import → Fixkosten-Zuordnung: '${imp.Buchungstext}' → ${konto}`
+        `🔁 Import → Dauerbeleg-Zuordnung: '${imp.Buchungstext}' → ${konto}`
       );
     }
 
-    // 2️⃣ Exakte Import-Zuordnung überschreibt Fixkosten
+    // Exakte Import-Zuordnung überschreibt den Dauerbeleg-Fallback.
     const key = buildDateTextKey(imp.Datum, imp.Buchungstext);
     if (importZuordnung[key]) {
       konto = importZuordnung[key];
@@ -333,42 +377,30 @@ function generateAlleBuchungenPlan() {
     Logger.log(`✅ Lexware-Buchung: ${lx.Buchungstext} ${lx.Betrag} → ${lx.Buchungskonto}`);
   });
 
-  // 7d️⃣ Fixkosten Forecast
+  // 7d️⃣ Lexware-Dauerbelege forecasten
   const today = new Date();
   const forecastEnd = new Date(today.getFullYear() + 2, today.getMonth(), today.getDate());
-  fixkosten.forEach(f => {
-    if (!f.Startdatum) return;
-    let d = new Date(f.Startdatum);
-    while (d <= forecastEnd && (!f.Enddatum || d <= f.Enddatum)) {
+  dauerbelege.forEach(dauerbeleg => {
+    let d = new Date(dauerbeleg.Startdatum);
+    while (d <= forecastEnd && (!dauerbeleg.Enddatum || d <= dauerbeleg.Enddatum)) {
       // Prüfen, ob schon ein Import existiert ±3 Tage
       let matchImport = alleBuchungen.find(a =>
-        a.Kostenart === f.BuchungstextAbgleich &&
+        a.Kostenart === dauerbeleg.BuchungstextAbgleich &&
         Math.abs((a.Datum - d) / (1000 * 60 * 60 * 24)) <= 3
       );
       if (!matchImport) {
-        let werttag = new Date(d);
-        if (f.Wertstellungstag) werttag.setDate(f.Wertstellungstag);
-        // Für 2026+ Daten die durch Lexware Umsatz Import abgedeckt sind, kein Forecast
-        if (letztesDatumLexware && werttag >= START_2026 && werttag <= letztesDatumLexware) {
-          Logger.log(`⏭️ Forecast übersprungen (Lexware Zeitraum): ${f.Kostenart} am ${Utilities.formatDate(werttag, Session.getScriptTimeZone(), "yyyy-MM-dd")}`);
-        } else {
-          alleBuchungen.push({
-            Kostenart: f.Kostenart,
-            Buchungskonto: f.Buchungskonto,
-            Datum: werttag,
-            Betrag: Number((-Math.abs(f.Betrag)).toFixed(2)),
-            Quelle: "FixkostenForecast"
-          });
-          Logger.log(`📅 Fixkosten hinzugefügt: ${f.Kostenart} ${-Math.abs(f.Betrag)} → ${f.Buchungskonto} am ${Utilities.formatDate(werttag, Session.getScriptTimeZone(), "yyyy-MM-dd")}`);
-        }
+        alleBuchungen.push({
+          Kostenart: dauerbeleg.Kostenart,
+          Buchungskonto: dauerbeleg.Buchungskonto,
+          Datum: new Date(d),
+          Betrag: dauerbeleg.Betrag,
+          Quelle: "LexwareDauerbeleg"
+        });
+        Logger.log(`📅 Dauerbeleg hinzugefügt: ${dauerbeleg.Kostenart} ${dauerbeleg.Betrag} → ${dauerbeleg.Buchungskonto} am ${Utilities.formatDate(d, Session.getScriptTimeZone(), "yyyy-MM-dd")}`);
       }
 
       // Intervall erhöhen
-      const intervall = String(f.Intervall || "").toLowerCase();
-      if (intervall === "monat") d.setMonth(d.getMonth() + 1);
-      else if (intervall === "quartal") d.setMonth(d.getMonth() + 3);
-      else if (intervall === "jahr") d.setFullYear(d.getFullYear() + 1);
-      else break;
+      d.setMonth(d.getMonth() + dauerbeleg.IntervallMonate);
     }
   });
 
