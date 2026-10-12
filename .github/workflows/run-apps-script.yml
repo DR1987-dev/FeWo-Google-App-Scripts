@@ -1,0 +1,66 @@
+name: Run Apps Script (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      function_name:
+        description: "Auszuführende Funktion"
+        type: choice
+        default: runAll
+        options:
+          - runAll
+          - importLodgifyEinnahmenToImport
+          - importLexwareAll
+          - processLodgifyInvoiceUploadToLexware
+          - createLexwareManuelleUmsaetze
+          - generateAlleBuchungenPlan
+          - generateMonatswerte
+      debug:
+        description: "Debug-Logging aktivieren"
+        type: boolean
+        default: true
+
+concurrency:
+  group: run-apps-script
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    env:
+      SCRIPT_ID: ${{ secrets.SCRIPT_ID }}
+      GOOGLE_IMPERSONATE_USER: ${{ vars.GOOGLE_IMPERSONATE_USER }}
+      FUNCTION_NAME: ${{ inputs.function_name }}
+      DEBUG: ${{ inputs.debug }}
+      LEXWARE_API_KEY: ${{ secrets.LEXWARE_API_KEY }}
+      LODGIFY_API_KEY: ${{ secrets.LODGIFY_API_KEY }}
+      ALERT_EMAIL: ${{ vars.ALERT_EMAIL }}
+      LODGIFY_PROPERTY_ID: ${{ vars.LODGIFY_PROPERTY_ID }}
+      LODGIFY_API_BASE_URL: ${{ vars.LODGIFY_API_BASE_URL }}
+      INVOICE_EINMALKUNDEN: ${{ vars.INVOICE_EINMALKUNDEN }}
+      INVOICE_UPLOAD_CUTOFF_DATE: ${{ vars.INVOICE_UPLOAD_CUTOFF_DATE }}
+      INVOICE_VOUCHER_DAYS_BEFORE_CHECKIN: ${{ vars.INVOICE_VOUCHER_DAYS_BEFORE_CHECKIN }}
+      PAYMENT_REQUEST_ALERT_EMAILS: ${{ vars.PAYMENT_REQUEST_ALERT_EMAILS }}
+      PAYMENT_REQUEST_ERROR_NOTIFY_EMAILS: ${{ vars.PAYMENT_REQUEST_ERROR_NOTIFY_EMAILS }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - name: Create credentials
+        run: |
+          umask 077
+          printf '%s' "$GOOGLE_SERVICE_ACCOUNT" > credentials.json
+        env:
+          GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+      - name: Deploy latest code (so githubRunner.js exists)
+        run: node scripts/deploy.js
+      - name: Run function
+        run: node scripts/runAppsScript.js
+      - name: Cleanup credentials
+        if: always()
+        run: rm -f credentials.json
