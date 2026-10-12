@@ -1,0 +1,81 @@
+name: Run FeWo Skripte (manuell)
+
+on:
+  workflow_dispatch:
+    inputs:
+      function_name:
+        description: "Auszuführende Funktion"
+        type: choice
+        default: runAll
+        options:
+          - runAll
+          - importLodgifyEinnahmenToImport
+          - importLexwareAll
+          - processLodgifyInvoiceUploadToLexware
+          - createLexwareManuelleUmsaetze
+          - generateAlleBuchungenPlan
+          - generateMonatswerte
+          - importAllCSVFromDrive
+          - createLexwareFixkosten
+      debug:
+        description: "Debug-Logging (HTTP/Sheets-Calls)"
+        type: boolean
+        default: true
+
+concurrency:
+  group: run-fewo
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    timeout-minutes: 60
+    env:
+      FUNCTION_NAME: ${{ inputs.function_name }}
+      DEBUG: ${{ inputs.debug }}
+      GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+      GOOGLE_IMPERSONATE_USER: ${{ vars.GOOGLE_IMPERSONATE_USER }}
+      SPREADSHEET_ID: ${{ vars.SPREADSHEET_ID }}
+      LEXWARE_API_KEY: ${{ secrets.LEXWARE_API_KEY }}
+      LODGIFY_API_KEY: ${{ secrets.LODGIFY_API_KEY }}
+      ALERT_EMAIL: ${{ vars.ALERT_EMAIL }}
+      LODGIFY_PROPERTY_ID: ${{ vars.LODGIFY_PROPERTY_ID }}
+      LODGIFY_API_BASE_URL: ${{ vars.LODGIFY_API_BASE_URL }}
+      LODGIFY_TIMEOUT_MS: ${{ vars.LODGIFY_TIMEOUT_MS }}
+      LODGIFY_BOOKINGS_PATH: ${{ vars.LODGIFY_BOOKINGS_PATH }}
+      LODGIFY_RESERVATIONS_PATH: ${{ vars.LODGIFY_RESERVATIONS_PATH }}
+      LODGIFY_GUEST_MESSAGE_PATH: ${{ vars.LODGIFY_GUEST_MESSAGE_PATH }}
+      LODGIFY_GUEST_MESSAGE_TYPE: ${{ vars.LODGIFY_GUEST_MESSAGE_TYPE }}
+      LODGIFY_GUEST_MESSAGE_SUBJECT_TEMPLATE: ${{ vars.LODGIFY_GUEST_MESSAGE_SUBJECT_TEMPLATE }}
+      LODGIFY_SHEET_NAME: ${{ vars.LODGIFY_SHEET_NAME }}
+      LODGIFY_AUDIT_SHEET_NAME: ${{ vars.LODGIFY_AUDIT_SHEET_NAME }}
+      INVOICE_EINMALKUNDEN: ${{ vars.INVOICE_EINMALKUNDEN }}
+      INVOICE_UPLOAD_CUTOFF_DATE: ${{ vars.INVOICE_UPLOAD_CUTOFF_DATE }}
+      INVOICE_UPLOAD_SHEET_NAME: ${{ vars.INVOICE_UPLOAD_SHEET_NAME }}
+      INVOICE_VOUCHER_DAYS_BEFORE_CHECKIN: ${{ vars.INVOICE_VOUCHER_DAYS_BEFORE_CHECKIN }}
+      PAYMENT_REQUEST_ALERT_EMAILS: ${{ vars.PAYMENT_REQUEST_ALERT_EMAILS }}
+      PAYMENT_REQUEST_ERROR_NOTIFY_EMAILS: ${{ vars.PAYMENT_REQUEST_ERROR_NOTIFY_EMAILS }}
+      PAYMENT_REQUEST_DAYS_BEFORE_CHECKIN: ${{ vars.PAYMENT_REQUEST_DAYS_BEFORE_CHECKIN }}
+      PAYMENT_REQUEST_WEEKS_BEFORE_CHECKIN: ${{ vars.PAYMENT_REQUEST_WEEKS_BEFORE_CHECKIN }}
+      PAYMENT_REQUEST_MESSAGE_TEMPLATE: ${{ vars.PAYMENT_REQUEST_MESSAGE_TEMPLATE }}
+      PAYMENT_REQUEST_SHEET_NAME: ${{ vars.PAYMENT_REQUEST_SHEET_NAME }}
+      FIXKOSTEN_SHEET_NAME: ${{ vars.FIXKOSTEN_SHEET_NAME }}
+      MANUELLE_UMSAETZE_SHEET_NAME: ${{ vars.MANUELLE_UMSAETZE_SHEET_NAME }}
+      LEXWARE_SHEET_NAME: ${{ vars.LEXWARE_SHEET_NAME }}
+      LEXWARE_AUSGABEN_SHEET_NAME: ${{ vars.LEXWARE_AUSGABEN_SHEET_NAME }}
+      LEXWARE_EINNAHMEN_SHEET_NAME: ${{ vars.LEXWARE_EINNAHMEN_SHEET_NAME }}
+      LEXWARE_KATEGORIEN_SHEET_NAME: ${{ vars.LEXWARE_KATEGORIEN_SHEET_NAME }}
+      LEXWARE_KONTO_ZUORDNUNG_SHEET_NAME: ${{ vars.LEXWARE_KONTO_ZUORDNUNG_SHEET_NAME }}
+      LEXWARE_KUNDEN_SHEET_NAME: ${{ vars.LEXWARE_KUNDEN_SHEET_NAME }}
+      LEXWARE_UMSAETZE_SHEET_NAME: ${{ vars.LEXWARE_UMSAETZE_SHEET_NAME }}
+      LEXWARE_ZAHLUNGEN_SHEET_NAME: ${{ vars.LEXWARE_ZAHLUNGEN_SHEET_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Run
+        run: node scripts/runLocal.js
