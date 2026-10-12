@@ -72,7 +72,7 @@ const handlers = {
 
     async "drive.findFolders"({ name }) {
         const drive = google.drive({ version: "v3", auth: await getAuth() });
-        const q = `mimeType='application/vnd.google-apps.folder' and trashed=false and name='${String(name).replace(/'/g, "\\'")}'`;
+        const q = `mimeType='application/vnd.google-apps.folder' and trashed=false and name='${String(name).replace(/[\\']/g, "\\$&")}'`;
         const res = await drive.files.list({ q, fields: "files(id,name)", pageSize: 100 });
         return res.data.files || [];
     },
