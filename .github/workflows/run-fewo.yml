@@ -36,7 +36,7 @@ jobs:
       FUNCTION_NAME: ${{ inputs.function_name }}
       DEBUG: ${{ inputs.debug }}
       GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
-      GOOGLE_IMPERSONATE_USER: ${{ vars.GOOGLE_IMPERSONATE_USER }}
+      GOOGLE_IMPERSONATE_USER: d.rybosch@davidsapartment.com
       SPREADSHEET_ID: ${{ vars.SPREADSHEET_ID }}
       LEXWARE_API_KEY: ${{ secrets.LEXWARE_API_KEY }}
       LODGIFY_API_KEY: ${{ secrets.LODGIFY_API_KEY }}
