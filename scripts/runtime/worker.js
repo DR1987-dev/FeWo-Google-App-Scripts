@@ -4,27 +4,28 @@ import { google } from "googleapis";
 
 const { port, signal, env } = workerData;
 const sig = new Int32Array(signal);
-let authPromise = null;
+const authPromises = new Map();
 
-function getAuth() {
-    if (!authPromise) {
+function getAuth(scope) {
+    if (!authPromises.has(scope)) {
         const credentials = JSON.parse(env.GOOGLE_SERVICE_ACCOUNT);
         const auth = new google.auth.JWT({
             email: credentials.client_email,
             key: credentials.private_key,
             subject: env.GOOGLE_IMPERSONATE_USER || undefined,
-            scopes: [
-                "https://www.googleapis.com/auth/spreadsheets",
-                "https://www.googleapis.com/auth/drive.readonly",
-                "https://www.googleapis.com/auth/gmail.send",
-            ],
+            scopes: [scope],
         });
-        authPromise = auth.authorize().then(() => auth);
+        authPromises.set(scope, auth.authorize().then(() => auth));
     }
-    return authPromise;
+    return authPromises.get(scope);
 }
 
-async function sheetsApi() { return google.sheets({ version: "v4", auth: await getAuth() }); }
+async function sheetsApi() {
+    return google.sheets({
+        version: "v4",
+        auth: await getAuth("https://www.googleapis.com/auth/spreadsheets"),
+    });
+}
 
 const handlers = {
     async fetch({ url, method, headers, body, timeoutMs }) {
@@ -71,14 +72,14 @@ const handlers = {
     },
 
     async "drive.findFolders"({ name }) {
-        const drive = google.drive({ version: "v3", auth: await getAuth() });
+        const drive = google.drive({ version: "v3", auth: await getAuth("https://www.googleapis.com/auth/drive.readonly") });
         const q = `mimeType='application/vnd.google-apps.folder' and trashed=false and name='${String(name).replace(/[\\']/g, "\\$&")}'`;
         const res = await drive.files.list({ q, fields: "files(id,name)", pageSize: 100 });
         return res.data.files || [];
     },
 
     async "drive.listFiles"({ folderId }) {
-        const drive = google.drive({ version: "v3", auth: await getAuth() });
+        const drive = google.drive({ version: "v3", auth: await getAuth("https://www.googleapis.com/auth/drive.readonly") });
         const out = [];
         let pageToken;
         do {
@@ -95,13 +96,13 @@ const handlers = {
     },
 
     async "drive.download"({ fileId }) {
-        const drive = google.drive({ version: "v3", auth: await getAuth() });
+        const drive = google.drive({ version: "v3", auth: await getAuth("https://www.googleapis.com/auth/drive.readonly") });
         const res = await drive.files.get({ fileId, alt: "media" }, { responseType: "text" });
         return typeof res.data === "string" ? res.data : JSON.stringify(res.data);
     },
 
     async "mail.send"({ from, to, subject, body }) {
-        const gmail = google.gmail({ version: "v1", auth: await getAuth() });
+        const gmail = google.gmail({ version: "v1", auth: await getAuth("https://www.googleapis.com/auth/gmail.send") });
         const encSubject = "=?UTF-8?B?" + Buffer.from(subject, "utf8").toString("base64") + "?=";
         const raw = [
             `From: ${from}`, `To: ${to}`, `Subject: ${encSubject}`,
