@@ -5,7 +5,8 @@
 set -uo pipefail
 BASE="${1:?Worker-URL angeben}"
 BASE="${BASE%/}"
-KEY="$(printf %s "${LODGIFY_API_KEY:?LODGIFY_API_KEY fehlt}" | tr -d '[:space:]')"
+[ -n "${LODGIFY_API_KEY:-}" ] || { echo "LODGIFY_API_KEY ist nicht gesetzt." >&2; exit 1; }
+KEY="$(printf %s "$LODGIFY_API_KEY" | tr -d '[:space:]')"
 fail=0
 for ev in booking_new_any_status booking_change booking_status_change_booked \
           booking_status_change_tentative booking_status_change_open booking_status_change_declined; do

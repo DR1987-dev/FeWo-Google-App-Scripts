@@ -4,7 +4,8 @@
 # Hinweis: Subscriptions werden gelöscht, wenn der API-Key widerrufen wird -> neu ausführen.
 set -uo pipefail
 CALLBACK="${1:?Callback-URL angeben}"
-KEY="$(printf %s "${LEXWARE_API_KEY:?LEXWARE_API_KEY fehlt}" | tr -d '[:space:]')"
+[ -n "${LEXWARE_API_KEY:-}" ] || { echo "LEXWARE_API_KEY ist nicht gesetzt." >&2; exit 1; }
+KEY="$(printf %s "$LEXWARE_API_KEY" | tr -d '[:space:]')"
 fail=0
 for t in voucher.created voucher.changed voucher.deleted voucher.status.changed \
          invoice.created invoice.changed invoice.deleted invoice.status.changed \
