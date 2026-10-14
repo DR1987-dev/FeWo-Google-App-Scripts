@@ -11,6 +11,7 @@ function runAll() {
         "createLexwareManuelleUmsaetze fehlgeschlagen"
       );
     }
+    syncLexwareDauerbelegeToFixkosten();
     generateAlleBuchungenPlan();
     generateMonatswerte();
     Logger.log("✅ Alle Skripte erfolgreich ausgeführt");
@@ -34,6 +35,7 @@ function runDelta() {
         "createLexwareManuelleUmsaetze fehlgeschlagen"
       );
     }
+    syncLexwareDauerbelegeToFixkosten();
     generateAlleBuchungenPlan();
     generateMonatswerte();
     Logger.log("✅ Delta-Lauf erfolgreich ausgeführt");

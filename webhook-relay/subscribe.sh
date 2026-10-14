@@ -10,7 +10,8 @@ fail=0
 for t in voucher.created voucher.changed voucher.deleted voucher.status.changed \
          invoice.created invoice.changed invoice.deleted invoice.status.changed \
          credit-note.created credit-note.changed credit-note.deleted \
-         payment.changed contact.created contact.changed contact.deleted; do
+         payment.changed contact.created contact.changed contact.deleted \
+         recurring-template.created recurring-template.changed recurring-template.deleted; do
   code=$(curl -s -o /tmp/sub.out -w "%{http_code}" https://api.lexware.io/v1/event-subscriptions \
     -X POST -H "Authorization: Bearer ${KEY}" -H "Content-Type: application/json" \
     -d "{\"eventType\":\"$t\",\"callbackUrl\":\"$CALLBACK\"}")

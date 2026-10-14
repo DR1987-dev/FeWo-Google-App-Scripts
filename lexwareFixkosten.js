@@ -1000,3 +1000,109 @@ function createLexwareFixkosten() {
 
     return { ok: errors === 0, created: created, skipped: skipped, errors: errors };
 }
+
+/**
+ * Synchronisiert die Dauerbelege aus Lexware in das Blatt "Lexware Fixkosten"
+ * (Quelle für den Forecast). Das Blatt wird bei jedem Lauf komplett neu geschrieben,
+ * pro Dauerbeleg-Position eine Zeile. Belege werden nicht mehr per API erzeugt.
+ *
+ * @return {{ok:boolean, templates:number, rows:number}}
+ */
+function syncLexwareDauerbelegeToFixkosten() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) throw new Error("No active spreadsheet");
+    setupFixkostenSheet();
+    var sheet = ss.getSheetByName(getFixkostenSheetName_());
+
+    var contactIdToVendor = {};
+    try {
+        contactIdToVendor = buildContactIdToVendorNumberIndex_() || {};
+    } catch (e) {
+        Logger.log("Fixkosten-Sync: Lieferantenindex nicht verfügbar: " + e.message);
+    }
+
+    var intervalNames = { MONTHLY: "monatlich", QUARTERLY: "quartalsweise", SEMIANNUALLY: "halbjährlich", HALF_YEARLY: "halbjährlich", YEARLY: "jährlich", ANNUALLY: "jährlich" };
+    var intervalMonths = { monatlich: 1, quartalsweise: 3, "halbjährlich": 6, "jährlich": 12 };
+    var rows = [];
+    var templates = 0;
+    var page = 0;
+    var totalPages = 1;
+
+    do {
+        var body = lexwareGetRecurringTemplates_(page, 100).body;
+        if (!body || !Array.isArray(body.content)) {
+            throw new Error("Fixkosten-Sync: Unerwartete Antwort der Dauerbelege auf Seite " + page);
+        }
+        totalPages = body.totalPages !== undefined ? body.totalPages : (body.page && body.page.totalPages !== undefined ? body.page.totalPages : 1);
+
+        body.content.forEach(function (summary) {
+            var id = String(summary.id || "").trim();
+            if (!id) return;
+            var detail = lexwareGetRecurringTemplateDetail_(id).body || {};
+            if (detail.archived) return;
+            templates++;
+
+            var settings = detail.recurringTemplateSettings || summary.recurringTemplateSettings || {};
+            var status = String(settings.executionStatus || "").toUpperCase();
+            var rhythm = intervalNames[String(settings.executionInterval || "").toUpperCase()] || "";
+            var start = settings.startDate ? new Date(settings.startDate) : null;
+            var end = settings.endDate ? new Date(settings.endDate) : null;
+            var active = status !== "PAUSED" && status !== "INACTIVE" && status !== "ARCHIVED" &&
+                !(end && !isNaN(end.getTime()) && end.getTime() < Date.now());
+            var day = start && !isNaN(start.getTime()) ? start.getDate() : "";
+            var month = "";
+            if (start && !isNaN(start.getTime())) {
+                var m = start.getMonth() + 1;
+                var months = intervalMonths[rhythm];
+                month = months === 12 ? m : (months === 3 || months === 6 ? ((m - 1) % months) + 1 : "");
+            }
+
+            var address = detail.address || summary.address || {};
+            var vendorNumber = address.contactId ? (contactIdToVendor[String(address.contactId).trim()] || "") : "";
+            var vendorName = address.name || "";
+            var items = Array.isArray(detail.lineItems) && detail.lineItems.length ? detail.lineItems : [{
+                name: detail.title || summary.title || vendorName || "Dauerbeleg",
+                lineItemAmount: detail.totalPrice && detail.totalPrice.totalGrossAmount,
+                taxRatePercentage: ""
+            }];
+
+            items.forEach(function (item) {
+                var amount = item.lineItemAmount !== undefined
+                    ? Number(item.lineItemAmount)
+                    : (item.unitPrice && item.unitPrice.grossAmount !== undefined
+                        ? Number(item.unitPrice.grossAmount) * Number(item.quantity || 1)
+                        : 0);
+                rows.push([
+                    String(item.name || item.description || detail.title || vendorName || "Dauerbeleg").trim(),
+                    vendorName,
+                    vendorNumber,
+                    isFinite(amount) ? Number(amount.toFixed(2)) : "",
+                    item.taxRatePercentage !== undefined ? item.taxRatePercentage : "",
+                    rhythm,
+                    day,
+                    month,
+                    "",
+                    active,
+                    detail.title || summary.title || "",
+                    "",
+                    id,
+                    items.length > 1 ? id : ""
+                ]);
+            });
+        });
+        page++;
+    } while (page < totalPages);
+
+    // Bei leerer Antwort nichts überschreiben, damit ein API-Problem den Forecast nicht leert.
+    if (!rows.length) {
+        Logger.log("Fixkosten-Sync: keine Dauerbelege gefunden – Blatt unverändert.");
+        return { ok: true, templates: 0, rows: 0 };
+    }
+
+    sheet.clearContents();
+    sheet.appendRow(FIXKOSTEN_HEADERS);
+    sheet.getRange(1, 1, 1, FIXKOSTEN_HEADERS.length).setFontWeight("bold");
+    sheet.getRange(2, 1, rows.length, FIXKOSTEN_HEADERS.length).setValues(rows);
+    Logger.log("Fixkosten-Sync: " + templates + " Dauerbeleg(e), " + rows.length + " Zeile(n) geschrieben.");
+    return { ok: true, templates: templates, rows: rows.length };
+}

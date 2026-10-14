@@ -13,6 +13,7 @@ const ALLOWED = [
     "importLodgifyEinnahmenToImport",
     "importLexwareAll",
     "importLexwareDelta",
+    "syncLexwareDauerbelegeToFixkosten",
     "processLodgifyInvoiceUploadToLexware",
     "createLexwareManuelleUmsaetze",
     "generateAlleBuchungenPlan",
