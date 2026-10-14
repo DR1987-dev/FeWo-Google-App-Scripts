@@ -71,6 +71,7 @@ const LODGIFY_EVENTS = [
     "booking_status_change_tentative",
     "booking_status_change_open",
     "booking_status_change_declined",
+    "availability_change",
 ];
 
 async function verifyLodgifySignature(rawBody, header, secret) {

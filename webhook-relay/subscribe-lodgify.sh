@@ -9,7 +9,7 @@ BASE="${BASE%/}"
 KEY="$(printf %s "$LODGIFY_API_KEY" | tr -d '[:space:]')"
 fail=0
 for ev in booking_new_any_status booking_change booking_status_change_booked \
-          booking_status_change_tentative booking_status_change_open booking_status_change_declined; do
+          booking_status_change_tentative booking_status_change_open booking_status_change_declined availability_change; do
   code=$(curl -s -o /tmp/lodgify-sub.out -w "%{http_code}" https://api.lodgify.com/webhooks/v1/subscribe \
     -X POST -H "X-ApiKey: ${KEY}" -H "Content-Type: application/json" \
     -d "{\"event\":\"$ev\",\"target_url\":\"$BASE/lodgify/$ev\"}")

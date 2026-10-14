@@ -308,7 +308,17 @@ function importLodgifyEinnahmenToImport(queryParams) {
             .setValues(newRows);
     }
 
-    Logger.log(`Lodgify import summary: raw=${combinedItems.length}, excludeDeclinedCancelled=${excludeDeclinedCancelled}, confirmedRaw=${confirmedRawItems.length}, confirmedUnique=${allItems.length}, sourceDuplicates=${deduped.duplicateCount}, inserted=${newRows.length}, updated=${updatedExisting}, unchanged=${unchangedExisting}, duplicateSkipped=${skippedDuplicate}, missingDate=${skippedMissingDate}, invalid=${skippedInvalid}, amountPositive=${mappedAmountPositive}, amountZero=${mappedAmountZero}`);
+    let removedStale = 0;
+    const fetchComplete = !bookingsResult.error && !reservationsResult.error &&
+        !bookingsResult.warning && !reservationsResult.warning &&
+        Object.keys(params).length === 0 && allItems.length > 0;
+    if (fetchComplete) {
+        removedStale = removeStaleLodgifyImportRows_(sheet, existingRows, allItems);
+    } else {
+        Logger.log("Lodgify Löschabgleich übersprungen (unvollständiger Abruf oder gefilterte Abfrage).");
+    }
+
+    Logger.log(`Lodgify import summary: raw=${combinedItems.length}, excludeDeclinedCancelled=${excludeDeclinedCancelled}, confirmedRaw=${confirmedRawItems.length}, confirmedUnique=${allItems.length}, sourceDuplicates=${deduped.duplicateCount}, inserted=${newRows.length}, updated=${updatedExisting}, removedStale=${removedStale}, unchanged=${unchangedExisting}, duplicateSkipped=${skippedDuplicate}, missingDate=${skippedMissingDate}, invalid=${skippedInvalid}, amountPositive=${mappedAmountPositive}, amountZero=${mappedAmountZero}`);
     Logger.log(`Lodgify status summary before filter: ${JSON.stringify(statusSummaryBefore)}`);
     Logger.log(`Lodgify status summary after filter: ${JSON.stringify(statusSummaryAfter)}`);
     Logger.log(`Lodgify year summary raw: ${JSON.stringify(yearSummaryRaw)}`);
@@ -1672,4 +1682,47 @@ function diagnoseLodgifyAuthModes(path, queryParams) {
         url,
         results
     };
+}
+
+/**
+ * Entfernt Import-Zeilen ("Lodgify <Kanal> <ID>") von Buchungen, die nicht mehr als bestätigt
+ * in Lodgify existieren (storniert, abgelehnt oder gelöscht). Zeilen ohne Lodgify-Präfix
+ * (manuelle Einträge) bleiben unangetastet. Wären mehr als 30 % der Lodgify-Zeilen betroffen,
+ * wird abgebrochen, um bei unvollständigen API-Antworten keine Daten zu verlieren.
+ *
+ * @param {Sheet} sheet
+ * @param {Array<Array>} existingRows Datenzeilen (ohne Kopfzeile), Stand vor dem Anhängen neuer Zeilen.
+ * @param {Array<Object>} confirmedItems Aktuell bestätigte Buchungen.
+ * @return {number} Anzahl entfernter Zeilen.
+ */
+function removeStaleLodgifyImportRows_(sheet, existingRows, confirmedItems) {
+    const liveIds = {};
+    confirmedItems.forEach(item => {
+        const id = String(firstDefined(item, ["id", "bookingId", "reservationId"]) || "").trim();
+        if (id) liveIds[id] = true;
+    });
+
+    const staleRowNumbers = [];
+    let lodgifyRows = 0;
+    existingRows.forEach((row, idx) => {
+        const text = String(row[4] || "").trim();
+        if (!/^Lodgify\s/.test(text)) return;
+        const bookingId = parseBookingIdFromText_(text);
+        if (!bookingId) return;
+        lodgifyRows++;
+        if (!liveIds[bookingId]) staleRowNumbers.push(idx + 2);
+    });
+
+    if (staleRowNumbers.length === 0) return 0;
+    if (staleRowNumbers.length > lodgifyRows * 0.3) {
+        Logger.log(
+            "Lodgify Löschabgleich abgebrochen: " + staleRowNumbers.length + " von " + lodgifyRows +
+            " Zeilen wären betroffen (Schutzgrenze 30 %)."
+        );
+        return 0;
+    }
+
+    staleRowNumbers.sort((x, y) => y - x).forEach(rowNumber => sheet.deleteRow(rowNumber));
+    Logger.log("Lodgify Löschabgleich: " + staleRowNumbers.length + " Zeile(n) entfernt.");
+    return staleRowNumbers.length;
 }
