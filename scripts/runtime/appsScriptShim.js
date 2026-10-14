@@ -278,6 +278,11 @@ class Sheet {
         this.rows = [];
         this.ss.enqueue({ t: "request", request: { updateCells: { range: { sheetId: this.id }, fields: "userEnteredValue,userEnteredFormat" } } });
     }
+    clearContents() {
+        this.rows = [];
+        this.ss.enqueue({ t: "clearValues", range: `'${this.name.replace(/'/g, "''")}'` });
+        return this;
+    }
     setFrozenRows(n) {
         this.frozen = n;
         this.ss.enqueue({ t: "request", request: { updateSheetProperties: { properties: { sheetId: this.id, gridProperties: { frozenRowCount: n } }, fields: "gridProperties.frozenRowCount" } } });
