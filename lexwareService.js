@@ -1373,6 +1373,7 @@ function importLexwarePayments() {
 function importLexwareAll() {
     lexwareVoucherDetailCache_ = {};
     lexwareUpdatedDateFrom_ = "";
+    removeDeletedLexwareVouchers_();
     importLexwareToSheet();
     importLexwareEinnahmen();
     importLexwareAusgaben();
@@ -1414,6 +1415,10 @@ function importLexwareDelta() {
     Logger.log("Lexware Delta-Import: updatedDateFrom=" + lexwareUpdatedDateFrom_);
     var sinceDay = lexwareUpdatedDateFrom_;
     try {
+        // Gelöschte Belege tauchen in updatedDateFrom nicht auf -> ID-Abgleich über die komplette Liste.
+        lexwareUpdatedDateFrom_ = "";
+        removeDeletedLexwareVouchers_();
+        lexwareUpdatedDateFrom_ = sinceDay;
         importLexwareToSheet();
         importLexwareEinnahmen();
         importLexwareAusgaben();
@@ -1432,4 +1437,77 @@ function importLexwareDelta() {
         lexwareUpdatedDateFrom_ = "";
     }
     return { ok: true, updatedDateFrom: sinceDay };
+}
+
+/**
+ * Entfernt Zeilen von in Lexware gelöschten Belegen aus allen Beleg-Blättern.
+ * Es wird nur die ID-Liste (voucherType=any, ohne Detailabrufe) geholt. Bei Fehler oder
+ * leerer Liste passiert nichts, damit ein API-Problem keine Daten löscht.
+ *
+ * @return {{ok:boolean, removed:number}}
+ */
+function removeDeletedLexwareVouchers_() {
+    var savedFilter = lexwareUpdatedDateFrom_;
+    lexwareUpdatedDateFrom_ = "";
+    var liveIds = {};
+    var count = 0;
+    try {
+        var page = 0;
+        var totalPages = 1;
+        do {
+            var body = lexwareGetVoucherlist_("any", page, 250).body;
+            if (!body || !Array.isArray(body.content)) {
+                Logger.log("Lexware Löschabgleich übersprungen: unerwartete Antwort.");
+                return { ok: false, removed: 0 };
+            }
+            body.content.forEach(function (v) {
+                var id = String(v.id || "").trim();
+                if (id) { liveIds[id] = true; count++; }
+            });
+            totalPages = body.totalPages !== undefined ? body.totalPages
+                       : (body.page && body.page.totalPages !== undefined ? body.page.totalPages : 1);
+            page++;
+        } while (page < totalPages);
+    } catch (e) {
+        Logger.log("Lexware Löschabgleich übersprungen: " + e.message);
+        return { ok: false, removed: 0 };
+    } finally {
+        lexwareUpdatedDateFrom_ = savedFilter;
+    }
+    if (count === 0) {
+        Logger.log("Lexware Löschabgleich übersprungen: Belegliste leer.");
+        return { ok: false, removed: 0 };
+    }
+
+    var props = PropertiesService.getScriptProperties();
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var targets = [
+        { name: getLexwareConfig().sheetName, idCol: 1 },
+        { name: (props.getProperty("LEXWARE_EINNAHMEN_SHEET_NAME") || "Lexware_Einnahmen").trim(), idCol: 1 },
+        { name: (props.getProperty("LEXWARE_AUSGABEN_SHEET_NAME") || "Lexware_Ausgaben").trim(), idCol: 1 },
+        { name: (props.getProperty("LEXWARE_UMSAETZE_SHEET_NAME") || "Lexware Umsatz Import").trim(), idCol: 2 },
+        { name: (props.getProperty("LEXWARE_ZAHLUNGEN_SHEET_NAME") || LEXWARE_ZAHLUNGEN_SHEET_NAME).trim(), idCol: 1 }
+    ];
+
+    var removed = 0;
+    targets.forEach(function (t) {
+        var sheet = ss.getSheetByName(t.name);
+        if (!sheet || sheet.getLastRow() < 2) return;
+        // Altes Umsätze-Format (A1 = "ID") hat die Beleg-ID nicht in Spalte B.
+        if (t.idCol === 2 && String(sheet.getRange(1, 1).getValue() || "").trim() === "ID") return;
+        var values = sheet.getRange(2, t.idCol, sheet.getLastRow() - 1, 1).getValues();
+        var rowsToDelete = [];
+        values.forEach(function (row, idx) {
+            var id = String(row[0] || "").trim();
+            if (id && !liveIds[id]) rowsToDelete.push(idx + 2);
+        });
+        rowsToDelete.sort(function (a, b) { return b - a; });
+        rowsToDelete.forEach(function (r) { sheet.deleteRow(r); });
+        if (rowsToDelete.length > 0) {
+            Logger.log("Lexware Löschabgleich: " + rowsToDelete.length + " Zeile(n) aus '" + t.name + "' entfernt.");
+            removed += rowsToDelete.length;
+        }
+    });
+    Logger.log("Lexware Löschabgleich abgeschlossen: Belege in Lexware=" + count + ", Zeilen entfernt=" + removed);
+    return { ok: true, removed: removed };
 }
