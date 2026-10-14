@@ -29,9 +29,11 @@ on:
         type: boolean
         default: true
 
+# Ein Lexware-Vorgang löst oft mehrere Events aus (z. B. voucher.changed + payment.changed).
+# Webhook-Läufe warten kurz und ein neuerer Lauf ersetzt den älteren -> nur ein Lauf pro Burst.
 concurrency:
-  group: run-fewo
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'repository_dispatch' && 'run-fewo-webhook' || 'run-fewo' }}
+  cancel-in-progress: ${{ github.event_name == 'repository_dispatch' }}
 
 jobs:
   run:
@@ -79,6 +81,9 @@ jobs:
       LEXWARE_UMSAETZE_SHEET_NAME: ${{ vars.LEXWARE_UMSAETZE_SHEET_NAME }}
       LEXWARE_ZAHLUNGEN_SHEET_NAME: ${{ vars.LEXWARE_ZAHLUNGEN_SHEET_NAME }}
     steps:
+      - name: Event-Burst abwarten
+        if: github.event_name == 'repository_dispatch'
+        run: sleep 30
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
