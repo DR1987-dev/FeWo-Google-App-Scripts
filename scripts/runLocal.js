@@ -18,7 +18,6 @@ const ALLOWED = [
     "generateAlleBuchungenPlan",
     "generateMonatswerte",
     "importAllCSVFromDrive",
-    "createLexwareFixkosten",
 ];
 
 function summary(md) {

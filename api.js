@@ -2,25 +2,7 @@ function onOpen() {
     SpreadsheetApp.getUi()
         .createMenu("FeWo Tools")
         .addItem("Ausgabe erfassen", "addAusgabeFromSheet")
-        .addItem("Lexware-Fixkosten erzeugen", "runLexwareFixkostenManually")
         .addToUi();
-}
-
-function runLexwareFixkostenManually() {
-    try {
-        var result = createLexwareFixkosten();
-        var message = "Erstellt: " + result.created +
-            " | Übersprungen: " + result.skipped +
-            " | Fehler: " + result.errors;
-        if (result.error) message += " | " + result.error;
-        Logger.log("Lexware-Fixkosten abgeschlossen: " + message);
-        try {
-            SpreadsheetApp.getActiveSpreadsheet().toast(message, "Lexware-Fixkosten abgeschlossen", 10);
-        } catch (e) {}
-    } catch (err) {
-        Logger.log("Fehler beim Erzeugen der Lexware-Fixkosten: " + String(err && err.message ? err.message : err));
-        throw err;
-    }
 }
 
 function addAusgabeFromSheet() {

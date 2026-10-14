@@ -24,7 +24,6 @@ on:
           - generateAlleBuchungenPlan
           - generateMonatswerte
           - importAllCSVFromDrive
-          - createLexwareFixkosten
       debug:
         description: "Debug-Logging (HTTP/Sheets-Calls)"
         type: boolean
@@ -71,7 +70,6 @@ jobs:
       PAYMENT_REQUEST_WEEKS_BEFORE_CHECKIN: ${{ vars.PAYMENT_REQUEST_WEEKS_BEFORE_CHECKIN }}
       PAYMENT_REQUEST_MESSAGE_TEMPLATE: ${{ vars.PAYMENT_REQUEST_MESSAGE_TEMPLATE }}
       PAYMENT_REQUEST_SHEET_NAME: ${{ vars.PAYMENT_REQUEST_SHEET_NAME }}
-      FIXKOSTEN_SHEET_NAME: ${{ vars.FIXKOSTEN_SHEET_NAME }}
       MANUELLE_UMSAETZE_SHEET_NAME: ${{ vars.MANUELLE_UMSAETZE_SHEET_NAME }}
       LEXWARE_SHEET_NAME: ${{ vars.LEXWARE_SHEET_NAME }}
       LEXWARE_AUSGABEN_SHEET_NAME: ${{ vars.LEXWARE_AUSGABEN_SHEET_NAME }}
