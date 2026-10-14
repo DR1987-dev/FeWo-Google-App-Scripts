@@ -23,3 +23,16 @@ LEXWARE_API_KEY=... ./subscribe.sh https://lexware-relay.<name>.workers.dev
 ```
 
 5. Test: change something in Lexware, then check the Actions tab for a "Run FeWo Skripte" run triggered by `repository_dispatch`.
+
+## Lodgify
+
+Lodgify signiert jeden Webhook (`ms-signature: sha256=<HMAC-SHA256 hex>`) mit einem eigenen Secret je Webhook, das nur bei der Erstellung ausgegeben wird. `subscribe-lodgify.sh` legt die Webhooks an und schreibt die Secrets direkt in den Worker.
+
+```bash
+npx wrangler deploy
+LODGIFY_API_KEY=... ./subscribe-lodgify.sh https://lexware-relay.<name>.workers.dev
+```
+
+- Callback-URLs: `<worker>/lodgify/<event>` (Lodgify verlangt pro Event eine eindeutige URL).
+- Bei `409` existiert der Webhook schon, das Secret ist nicht erneut abrufbar. Dann über `DELETE /webhooks/v1/unsubscribe` entfernen und neu anlegen.
+- Alle Webhooks lösen den Workflow `runDelta` aus (Lodgify-Import, Lexware-Delta, Rechnungs-Upload, Planung, Monatswerte).

@@ -9,6 +9,7 @@ import { globals, flushAll, logLines } from "./runtime/appsScriptShim.js";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ALLOWED = [
     "runAll",
+    "runDelta",
     "importLodgifyEinnahmenToImport",
     "importLexwareAll",
     "importLexwareDelta",
