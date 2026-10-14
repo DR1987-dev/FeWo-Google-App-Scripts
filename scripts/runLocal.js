@@ -11,6 +11,7 @@ const ALLOWED = [
     "runAll",
     "importLodgifyEinnahmenToImport",
     "importLexwareAll",
+    "importLexwareDelta",
     "processLodgifyInvoiceUploadToLexware",
     "createLexwareManuelleUmsaetze",
     "generateAlleBuchungenPlan",

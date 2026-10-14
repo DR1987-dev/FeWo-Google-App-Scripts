@@ -1,6 +1,12 @@
-name: Run FeWo Skripte (manuell)
+name: Run FeWo Skripte
 
 on:
+  # Lexware-Webhook (via Relay) -> inkrementeller Import
+  repository_dispatch:
+    types: [lexware-event]
+  # Nächtlicher Voll-Abgleich als Sicherheitsnetz (Löschungen, verpasste Events)
+  schedule:
+    - cron: "17 2 * * *"
   workflow_dispatch:
     inputs:
       function_name:
@@ -11,6 +17,7 @@ on:
           - runAll
           - importLodgifyEinnahmenToImport
           - importLexwareAll
+          - importLexwareDelta
           - processLodgifyInvoiceUploadToLexware
           - createLexwareManuelleUmsaetze
           - generateAlleBuchungenPlan
@@ -33,8 +40,8 @@ jobs:
       contents: read
     timeout-minutes: 60
     env:
-      FUNCTION_NAME: ${{ inputs.function_name }}
-      DEBUG: ${{ inputs.debug }}
+      FUNCTION_NAME: ${{ github.event_name == 'repository_dispatch' && 'importLexwareDelta' || github.event_name == 'schedule' && 'importLexwareAll' || inputs.function_name }}
+      DEBUG: ${{ github.event_name == 'workflow_dispatch' && inputs.debug || 'false' }}
       GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
       GOOGLE_IMPERSONATE_USER: d.rybosch@davidsapartment.com
       SPREADSHEET_ID: ${{ vars.SPREADSHEET_ID }}

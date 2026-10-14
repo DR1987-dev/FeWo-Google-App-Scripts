@@ -42,6 +42,16 @@ function isLexware404_(error) {
     return !!(error && error.message && /\(404\)/.test(String(error.message)));
 }
 
+// Lexware allows 2 requests/s; a central throttle replaces per-loop sleeps.
+var LEXWARE_MIN_REQUEST_INTERVAL_MS = 550;
+var lexwareLastRequestAt_ = 0;
+
+function lexwareThrottle_() {
+    var wait = lexwareLastRequestAt_ + LEXWARE_MIN_REQUEST_INTERVAL_MS - Date.now();
+    if (wait > 0) Utilities.sleep(wait);
+    lexwareLastRequestAt_ = Date.now();
+}
+
 function lexwareRequest(path, queryParams, baseUrl) {
     var config = validateLexwareConfig();
     var resolvedBaseUrl = baseUrl || LEXWARE_BASE_URL;
@@ -71,7 +81,9 @@ function lexwareRequest(path, queryParams, baseUrl) {
     var bodyText = "";
     var maxAttempts = 4;
     for (var attempt = 0; attempt < maxAttempts; attempt++) {
+        lexwareThrottle_();
         response = UrlFetchApp.fetch(url, options);
+        lexwareLastRequestAt_ = Date.now();
         status = response.getResponseCode();
         bodyText = response.getContentText() || "";
         if (status !== 429 || attempt === maxAttempts - 1) break;
@@ -172,12 +184,16 @@ function lexwarePostRequest_(path, payload, method, baseUrl) {
  * @param {number} page - 0-based page index.
  * @param {number} pageSize - items per page (max 250).
  */
+// When set (yyyy-MM-dd), voucherlist only returns vouchers updated on/after that day.
+var lexwareUpdatedDateFrom_ = "";
+
 function lexwareGetVoucherlist_(voucherType, page, pageSize) {
     var params = {
         voucherType: voucherType || "any",
         voucherStatus: "any",
         page: page || 0,
-        size: pageSize || 100
+        size: pageSize || 100,
+        updatedDateFrom: lexwareUpdatedDateFrom_
     };
     return lexwareRequest("/voucherlist", params);
 }
@@ -532,6 +548,16 @@ function lexwareGetVoucherDetail_(voucherId) {
     return lexwareRequest("/vouchers/" + encodeURIComponent(voucherId));
 }
 
+// Per-execution cache so Umsätze and Zahlungen share one detail request per voucher.
+var lexwareVoucherDetailCache_ = {};
+
+function lexwareGetVoucherDetailCached_(voucherId) {
+    if (!lexwareVoucherDetailCache_[voucherId]) {
+        lexwareVoucherDetailCache_[voucherId] = lexwareGetVoucherDetail_(voucherId);
+    }
+    return lexwareVoucherDetailCache_[voucherId];
+}
+
 /**
  * Ruft eine Seite der Lexware-Dauerbelege ab.
  *
@@ -826,7 +852,7 @@ function lexwareImportVouchersWithLineItemsToSheet_(voucherType, sheetName) {
         // Fetch full voucher detail to get line items only
         var voucherItems = [];
         try {
-            var detailResult = lexwareGetVoucherDetail_(voucherId);
+            var detailResult = lexwareGetVoucherDetailCached_(voucherId);
             var detail = detailResult.body;
             if (detail && Array.isArray(detail.voucherItems)) {
                 voucherItems = detail.voucherItems;
@@ -845,8 +871,6 @@ function lexwareImportVouchersWithLineItemsToSheet_(voucherType, sheetName) {
         } catch (e) {
             Logger.log("Lexware Umsätze: Detail-Abruf für Beleg " + voucherId + " fehlgeschlagen: " + e.message);
         }
-        // Courtesy pause between individual detail requests to avoid rate limiting
-        Utilities.sleep(300);
 
         // If the detail endpoint returned no items, fall back to a single summary row
         if (voucherItems.length === 0) {
@@ -1258,7 +1282,6 @@ function importLexwarePayments() {
                 totalPages = pageInfo.totalPages !== undefined ? pageInfo.totalPages
                            : (listBody.totalPages !== undefined ? listBody.totalPages : 1);
                 page++;
-                Utilities.sleep(300);
             } catch (e) {
                 Logger.log("Lexware Zahlungen: voucherlist (" + voucherType + ") fehlgeschlagen: " + e.message);
                 break;
@@ -1279,7 +1302,7 @@ function importLexwarePayments() {
         var hadFetchError = false;
 
         try {
-            var detailResult = lexwareGetVoucherDetail_(voucherId);
+            var detailResult = lexwareGetVoucherDetailCached_(voucherId);
             rawEntry = toRawString_(detailResult ? detailResult.body : undefined);
         } catch (e) {
             if (!isLexware404_(e)) {
@@ -1307,9 +1330,6 @@ function importLexwarePayments() {
                 newRows.push(row);
             }
         }
-
-        // Courtesy pause to respect the 2 req/s rate limit.
-        Utilities.sleep(300);
     });
 
     if (newRows.length > 0) {
@@ -1351,6 +1371,8 @@ function importLexwarePayments() {
  *   8. importLexwarePayments()            – raw voucher strings (Zahlungen)
  */
 function importLexwareAll() {
+    lexwareVoucherDetailCache_ = {};
+    lexwareUpdatedDateFrom_ = "";
     importLexwareToSheet();
     importLexwareEinnahmen();
     importLexwareAusgaben();
@@ -1375,4 +1397,39 @@ function importLexwareAll() {
     } catch (e) {
         Logger.log("importLexwarePayments skipped: " + e.message);
     }
+}
+
+/**
+ * Incremental import for webhook-triggered runs: only vouchers updated within the
+ * last LEXWARE_DELTA_DAYS days (script property, default 2) are fetched/written.
+ * Categories and Konto-Zuordnung are skipped. The window overlaps on purpose so
+ * dropped/coalesced runs are caught by the next one.
+ */
+function importLexwareDelta() {
+    var props = PropertiesService.getScriptProperties();
+    var days = Number(props.getProperty("LEXWARE_DELTA_DAYS")) || 2;
+    var since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    lexwareUpdatedDateFrom_ = Utilities.formatDate(since, "Europe/Berlin", "yyyy-MM-dd");
+    lexwareVoucherDetailCache_ = {};
+    Logger.log("Lexware Delta-Import: updatedDateFrom=" + lexwareUpdatedDateFrom_);
+    var sinceDay = lexwareUpdatedDateFrom_;
+    try {
+        importLexwareToSheet();
+        importLexwareEinnahmen();
+        importLexwareAusgaben();
+        try {
+            syncLexwareKundenSheet();
+        } catch (e) {
+            Logger.log("syncLexwareKundenSheet skipped: " + e.message);
+        }
+        importLexwareUmsaetze();
+        try {
+            importLexwarePayments();
+        } catch (e) {
+            Logger.log("importLexwarePayments skipped: " + e.message);
+        }
+    } finally {
+        lexwareUpdatedDateFrom_ = "";
+    }
+    return { ok: true, updatedDateFrom: sinceDay };
 }

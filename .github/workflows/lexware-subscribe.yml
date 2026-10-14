@@ -1,0 +1,24 @@
+name: Lexware Webhooks abonnieren
+
+on:
+  workflow_dispatch:
+    inputs:
+      callback_url:
+        description: "Webhook-Callback-URL (Cloudflare Worker)"
+        type: string
+        default: "https://lexware-relay.fewo-dr1987.workers.dev"
+
+jobs:
+  subscribe:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Subscribe
+        env:
+          LEXWARE_API_KEY: ${{ secrets.LEXWARE_API_KEY }}
+          CALLBACK_URL: ${{ inputs.callback_url }}
+        run: |
+          echo "::add-mask::$LEXWARE_API_KEY"
+          bash webhook-relay/subscribe.sh "$CALLBACK_URL"
