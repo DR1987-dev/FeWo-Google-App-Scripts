@@ -50,6 +50,7 @@ jobs:
       SPREADSHEET_ID: ${{ vars.SPREADSHEET_ID }}
       LEXWARE_API_KEY: ${{ secrets.LEXWARE_API_KEY }}
       LODGIFY_API_KEY: ${{ secrets.LODGIFY_API_KEY }}
+      LODGIFY_BOOKING_ID: ${{ github.event.client_payload.bookingId }}
       ALERT_EMAIL: ${{ vars.ALERT_EMAIL }}
       LODGIFY_PROPERTY_ID: ${{ vars.LODGIFY_PROPERTY_ID }}
       LODGIFY_API_BASE_URL: ${{ vars.LODGIFY_API_BASE_URL }}

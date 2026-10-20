@@ -23,7 +23,12 @@ function runAll() {
 // Webhook-getriggerter Lauf: wie runAll, aber mit inkrementellem Lexware-Import.
 function runDelta() {
   try {
-    importLodgifyEinnahmenToImport();
+    var lodgifyBookingId = PropertiesService.getScriptProperties().getProperty("LODGIFY_BOOKING_ID");
+    if (lodgifyBookingId) {
+      importLodgifyBookingToImport(lodgifyBookingId);
+    } else {
+      importLodgifyEinnahmenToImport();
+    }
     importLexwareDelta();
     processLodgifyInvoiceUploadToLexware();
     var manuelleUmsaetzeResult = createLexwareManuelleUmsaetze();
