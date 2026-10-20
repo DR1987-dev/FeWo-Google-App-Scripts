@@ -353,6 +353,15 @@ class Range {
         } } });
         return this;
     }
+    setNumberFormat(pattern) {
+        const sh = this.sheet;
+        sh.ss.enqueue({ t: "request", request: { repeatCell: {
+            range: { sheetId: sh.id, startRowIndex: this.r - 1, endRowIndex: this.r - 1 + this.nr, startColumnIndex: this.c - 1, endColumnIndex: this.c - 1 + this.nc },
+            cell: { userEnteredFormat: { numberFormat: { type: "DATE", pattern } } },
+            fields: "userEnteredFormat.numberFormat",
+        } } });
+        return this;
+    }
 }
 
 let activeSpreadsheet = null;
