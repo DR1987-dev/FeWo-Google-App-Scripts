@@ -1464,6 +1464,18 @@ function upsertAlleBuchungenFromItems_(sheetName, items, rawItems) {
     }
 
     const removed = deleteSheetRowsDescending_(sheet, rowsToDelete);
+    const finalLastRow = sheet.getLastRow();
+    if (finalLastRow > 1) {
+        [
+            ALLE_BUCHUNGEN_CHECKIN_COL_IDX_,
+            ALLE_BUCHUNGEN_CHECKOUT_COL_IDX_,
+            ALLE_BUCHUNGEN_HEADERS_.indexOf("BookingDate")
+        ].forEach(function (columnIndex) {
+            if (columnIndex >= 0) {
+                sheet.getRange(2, columnIndex + 1, finalLastRow - 1, 1).setNumberFormat("dd.MM.yyyy");
+            }
+        });
+    }
 
     Logger.log(
         `AlleBuchungen upsert (${sheetName}): inserted=${inserted}, updated=${updated}, removed=${removed}`
