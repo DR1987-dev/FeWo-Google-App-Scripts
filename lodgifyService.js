@@ -175,6 +175,130 @@ function lodgifyGetReservations(queryParams) {
     });
 }
 
+function importLodgifyBookingToImport(bookingId) {
+    const id = String(bookingId || "").trim();
+    if (!id) {
+        throw new Error("Lodgify booking ID must not be empty");
+    }
+
+    const booking = fetchLodgifyBookingById_(id);
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) {
+        throw new Error("No active spreadsheet");
+    }
+
+    const config = getLodgifyConfig();
+    const sheet = ss.getSheetByName(config.sheetName) || ss.insertSheet(config.sheetName);
+    if (sheet.getLastRow() === 0) {
+        sheet.appendRow([
+            "Konto",
+            "Gegenkonto",
+            "Buchungstag",
+            "Wertstellung",
+            "Buchungstext",
+            "Verwendungszweck",
+            "Beguenstigter/Zahlungspflichtiger",
+            "Kontonummer",
+            "BLZ",
+            "Soll",
+            "Haben"
+        ]);
+    }
+
+    const rows = sheet.getDataRange().getValues().slice(1);
+    const matchingRows = [];
+    rows.forEach((row, index) => {
+        const bookingText = String(row[4] || "").trim();
+        const rowId = /^Lodgify\s/.test(bookingText) ? bookingText.split(/\s+/).pop() : "";
+        if (rowId === id) matchingRows.push(index + 2);
+    });
+
+    const paymentRequestConfig = getPaymentRequestConfig_();
+    const includedBookings = isConfirmedBooking_(booking, true) ? [booking] : [];
+    upsertAlleBuchungenFromItems_(paymentRequestConfig.sheetName, includedBookings, [booking]);
+    if (includedBookings.length > 0) {
+        applyPaymentRequestUpdates_(
+            paymentRequestConfig.sheetName,
+            { [id]: booking },
+            paymentRequestConfig,
+            id
+        );
+    }
+
+    if (!isConfirmedBooking_(booking, true)) {
+        matchingRows.sort((a, b) => b - a).forEach(rowNumber => sheet.deleteRow(rowNumber));
+        Logger.log(`Lodgify booking sync: id=${id}, removed=${matchingRows.length}`);
+        return { ok: true, bookingId: id, removed: matchingRows.length };
+    }
+
+    const mapped = mapLodgifyItemToImportRowDetailed_(booking);
+    if (!mapped.row) {
+        Logger.log(`Lodgify booking sync skipped: id=${id}, reason=${mapped.reason}`);
+        return { ok: true, bookingId: id, skipped: mapped.reason };
+    }
+
+    if (matchingRows.length > 0) {
+        const rowNumber = matchingRows[0];
+        sheet.getRange(rowNumber, 1, 1, mapped.row.length).setValues([mapped.row]);
+        Logger.log(`Lodgify booking sync: id=${id}, updatedRow=${rowNumber}`);
+        return { ok: true, bookingId: id, updated: 1 };
+    }
+
+    sheet.appendRow(mapped.row);
+    Logger.log(`Lodgify booking sync: id=${id}, inserted=1`);
+    return { ok: true, bookingId: id, inserted: 1 };
+}
+
+function fetchLodgifyBookingById_(bookingId) {
+    const config = getLodgifyConfig();
+    const encodedId = encodeURIComponent(bookingId);
+    const endpointCandidates = uniquePaths_([
+        `/v2/reservations/bookings/${encodedId}`,
+        `/v2/bookings/${encodedId}`,
+        `${config.bookingsPath.replace(/\/+$/, "")}/${encodedId}`
+    ]);
+    let lastError = null;
+
+    for (let i = 0; i < endpointCandidates.length; i++) {
+        try {
+            const response = lodgifyRequest(endpointCandidates[i], { method: "get" });
+            const body = response.body;
+            const candidates = normalizeLodgifyList(body);
+            if (candidates.length === 0 && body && typeof body === "object") {
+                let payload = body;
+                while (payload && !Array.isArray(payload) && typeof payload === "object") {
+                    const nested = payload.booking || payload.reservation || payload.data;
+                    if (!nested || typeof nested !== "object") break;
+                    payload = nested;
+                }
+                if (Array.isArray(payload)) candidates.push.apply(candidates, payload);
+                else if (payload && typeof payload === "object") candidates.push(payload);
+            }
+
+            const matched = candidates.find(item => {
+                const itemId = firstDefined(item || {}, ["id", "bookingId", "booking_id", "reservationId", "reservation_id"]);
+                return itemId !== undefined && itemId !== null && String(itemId).trim() === bookingId;
+            });
+            if (matched) return matched;
+
+            if (candidates.length === 1) {
+                const itemId = firstDefined(candidates[0] || {}, ["id", "bookingId", "booking_id", "reservationId", "reservation_id"]);
+                if (itemId === undefined || itemId === null || itemId === "") {
+                    return Object.assign({}, candidates[0], { id: bookingId });
+                }
+            }
+            throw new Error(`Lodgify response did not contain booking ${bookingId}`);
+        } catch (err) {
+            lastError = String(err && err.message ? err.message : err);
+            const status = extractHttpStatusFromError_(lastError);
+            if (status === 404 || status === 405 || status === 401 || status === 403) continue;
+            throw err;
+        }
+    }
+
+    throw new Error(`Unable to fetch Lodgify booking ${bookingId}: ${lastError || "booking endpoint unavailable"}`);
+}
+
 function lodgifyHealthCheck() {
     return lodgifyGetBookings({ page: 1, size: 1 });
 }

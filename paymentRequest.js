@@ -1492,7 +1492,7 @@ function upsertAlleBuchungenFromItems_(sheetName, items, rawItems) {
  * @param {Object} config      { daysBeforeCheckin: number }
  * @returns {{ applied: number, skippedNoData: number, skippedWindow: number, skippedAlreadyRequested: number, skippedIneligible: number }}
  */
-function applyPaymentRequestUpdates_(sheetName, itemsById, config) {
+function applyPaymentRequestUpdates_(sheetName, itemsById, config, onlyBookingId) {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     if (!ss) return { applied: 0, failed: 0, skippedNoData: 0, skippedWindow: 0, skippedAlreadyRequested: 0, skippedIneligible: 0 };
 
@@ -1534,6 +1534,7 @@ function applyPaymentRequestUpdates_(sheetName, itemsById, config) {
         const row = allData[i];
         const bookingId = String(row[bookingIdColIdx] || "").trim();
         if (!bookingId) continue;
+        if (onlyBookingId && bookingId !== String(onlyBookingId).trim()) continue;
 
         const booking = itemsById[bookingId];
         if (!booking) {
