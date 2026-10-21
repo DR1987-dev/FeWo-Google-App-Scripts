@@ -124,18 +124,36 @@ export default {
                 return new Response("Invalid signature", { status: 401 });
             }
             let bookingId = null;
+            let bookingIdSource = null;
+            let payloadKeys = [];
             try {
                 let parsed = JSON.parse(rawBody);
                 if (Array.isArray(parsed)) parsed = parsed[0];
-                bookingId =
-                    parsed?.booking?.id ??
-                    parsed?.booking_id ??
-                    parsed?.bookingId ??
-                    parsed?.id ??
-                    null;
+                payloadKeys = parsed && typeof parsed === "object" ? Object.keys(parsed) : [];
+                const idCandidates = [
+                    ["booking.id", parsed?.booking?.id],
+                    ["booking_id", parsed?.booking_id],
+                    ["bookingId", parsed?.bookingId],
+                    ["id", parsed?.id],
+                    ["data.booking.id", parsed?.data?.booking?.id],
+                    ["data.booking_id", parsed?.data?.booking_id],
+                    ["data.bookingId", parsed?.data?.bookingId],
+                    ["data.id", parsed?.data?.id],
+                ];
+                const idCandidate = idCandidates.find(([, value]) => value !== undefined && value !== null && value !== "");
+                if (idCandidate) {
+                    bookingIdSource = idCandidate[0];
+                    bookingId = idCandidate[1];
+                }
             } catch {
                 /* ignore */
             }
+            console.log("Lodgify webhook received", JSON.stringify({
+                event,
+                bookingIdFound: bookingId !== null,
+                bookingIdSource,
+                payloadKeys,
+            }));
             // Lodgify erwartet exakt 200 OK.
             const ok = await dispatchToGithub(env, "lodgify-event", { eventType: event, bookingId });
             return new Response(null, { status: ok ? 200 : 502 });

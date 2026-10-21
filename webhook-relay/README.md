@@ -36,3 +36,4 @@ LODGIFY_API_KEY=... ./subscribe-lodgify.sh https://lexware-relay.<name>.workers.
 - Callback-URLs: `<worker>/lodgify/<event>` (Lodgify verlangt pro Event eine eindeutige URL).
 - Bei `409` existiert der Webhook schon, das Secret ist nicht erneut abrufbar. Dann über `DELETE /webhooks/v1/unsubscribe` entfernen und neu anlegen.
 - Alle Webhooks lösen den Workflow `runDelta` aus (Lodgify-Import, Lexware-Delta, Rechnungs-Upload, Planung, Monatswerte).
+- Worker-Logs live ansehen (im Relay-Verzeichnis): `./tail-lodgify.sh`. Die Diagnose protokolliert nur Event-Typ, erkannte ID-Quelle und Feldnamen – keine Payload-Werte.
