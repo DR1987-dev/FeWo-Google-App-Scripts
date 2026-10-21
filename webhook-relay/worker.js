@@ -125,7 +125,14 @@ export default {
             }
             let bookingId = null;
             try {
-                bookingId = JSON.parse(rawBody)?.booking?.id ?? null;
+                let parsed = JSON.parse(rawBody);
+                if (Array.isArray(parsed)) parsed = parsed[0];
+                bookingId =
+                    parsed?.booking?.id ??
+                    parsed?.booking_id ??
+                    parsed?.bookingId ??
+                    parsed?.id ??
+                    null;
             } catch {
                 /* ignore */
             }
