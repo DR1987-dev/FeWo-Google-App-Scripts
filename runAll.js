@@ -27,7 +27,8 @@ function runDelta() {
     if (lodgifyBookingId) {
       importLodgifyBookingToImport(lodgifyBookingId);
     } else {
-      importLodgifyEinnahmenToImport();
+      // Kein Einzelbuchungs-Event (z. B. Lexware-Webhook): nicht alle Lodgify-Buchungen laden.
+      Logger.log("ℹ️ Keine Lodgify-Buchungs-ID – Lodgify-Import übersprungen (Voll-Abgleich nachts via runAll)");
     }
     importLexwareDelta();
     processLodgifyInvoiceUploadToLexware();
