@@ -24,6 +24,7 @@ function runAll() {
 function runDelta() {
   try {
     var lodgifyBookingId = PropertiesService.getScriptProperties().getProperty("LODGIFY_BOOKING_ID");
+    Logger.log("ℹ️ LODGIFY_BOOKING_ID=" + JSON.stringify(lodgifyBookingId));
     if (lodgifyBookingId) {
       importLodgifyBookingToImport(lodgifyBookingId);
     } else {

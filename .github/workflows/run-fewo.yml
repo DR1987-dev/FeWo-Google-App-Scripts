@@ -33,7 +33,7 @@ on:
 # Ein Lexware-Vorgang löst oft mehrere Events aus (z. B. voucher.changed + payment.changed).
 # Webhook-Läufe warten kurz und ein neuerer Lauf ersetzt den älteren -> nur ein Lauf pro Burst.
 concurrency:
-  group: ${{ github.event_name == 'repository_dispatch' && 'run-fewo-webhook' || 'run-fewo' }}
+  group: ${{ github.event_name == 'repository_dispatch' && format('run-fewo-{0}-{1}', github.event.action, github.event.client_payload.bookingId || 'all') || 'run-fewo' }}
   cancel-in-progress: ${{ github.event_name == 'repository_dispatch' }}
 
 jobs:
