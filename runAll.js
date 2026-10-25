@@ -13,6 +13,7 @@ function runAll() {
     }
     generateAlleBuchungenPlan();
     generateMonatswerte();
+    runDoorKeySafely_();
     Logger.log("✅ Alle Skripte erfolgreich ausgeführt");
   } catch (e) {
     Logger.log("❌ Abbruch wegen Fehler: " + e.message);
@@ -43,9 +44,22 @@ function runDelta() {
     }
     generateAlleBuchungenPlan();
     generateMonatswerte();
+    runDoorKeySafely_();
     Logger.log("✅ Delta-Lauf erfolgreich ausgeführt");
   } catch (e) {
     Logger.log("❌ Abbruch wegen Fehler: " + e.message);
     throw e;
+  }
+}
+
+// Türcode-Fehler sollen den restlichen Lauf nicht abbrechen.
+function runDoorKeySafely_() {
+  try {
+    var result = processLodgifyDoorKeys();
+    if (result && result.ok === false) {
+      Logger.log("⚠️ DoorKey-Fehler: " + JSON.stringify(result.errors));
+    }
+  } catch (e) {
+    Logger.log("⚠️ DoorKey-Lauf fehlgeschlagen: " + e.message);
   }
 }

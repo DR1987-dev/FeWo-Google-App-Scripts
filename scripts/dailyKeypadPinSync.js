@@ -142,14 +142,15 @@ function extractMasterValue(masterXml, name) {
     return m ? m[1] : null;
 }
 
-function buildPin(checkIn, checkOut) {
+// Gleiches Format wie doorKey.js: TT + MM + Personen + Nächte.
+function buildPin(checkIn, checkOut, guests) {
     const day = String(checkIn.getUTCDate()).padStart(2, "0");
-    const year = String(checkIn.getUTCFullYear());
-    const stayDays = String(diffDaysCalendar(checkIn, checkOut));
-    return `${day}${year}${stayDays}`;
+    const month = String(checkIn.getUTCMonth() + 1).padStart(2, "0");
+    const nights = String(diffDaysCalendar(checkIn, checkOut));
+    return `${day}${month}${guests}${nights}`;
 }
 
-function decideAction(rows, checkInIdx, checkOutIdx, todayKey, bookingRefIdx = -1) {
+function decideAction(rows, checkInIdx, checkOutIdx, todayKey, bookingRefIdx = -1, doorKeyIdx = -1, guestsIdx = -1) {
     let action = null;
     const todaySkips = [];
 
@@ -190,10 +191,20 @@ function decideAction(rows, checkInIdx, checkOutIdx, todayKey, bookingRefIdx = -
                 checkOutDate
             };
         } else if (checkInKey === todayKey) {
+            const storedKey = doorKeyIdx >= 0 ? String(row[doorKeyIdx] ?? "").trim() : "";
+            const guests = guestsIdx >= 0 ? Number(row[guestsIdx]) : NaN;
+            let pin = storedKey;
+            if (!pin && Number.isInteger(guests) && guests > 0) {
+                pin = buildPin(checkInDate, checkOutDate, guests);
+            }
+            if (!pin) {
+                todaySkips.push(`SKIP: ${rowLabel} checks in today but has no DoorKey/Personen.`);
+                continue;
+            }
             candidate = {
                 priority: 1,
                 reason: "checkin_today",
-                pin: buildPin(checkInDate, checkOutDate),
+                pin,
                 checkInDate,
                 checkOutDate
             };
@@ -235,7 +246,7 @@ async function main() {
     });
 
     const sheets = google.sheets({ version: "v4", auth });
-    const range = `${sheetName}!A:Z`;
+    const range = `${sheetName}!A:AZ`;
     const sheetRes = await sheets.spreadsheets.values.get({
         spreadsheetId,
         range,
@@ -256,6 +267,9 @@ async function main() {
     const checkOutIdx = findHeaderIndex(headers, ["CheckOut", "Abreise", "Checkout"]);
     const bookingRefIdx = findHeaderIndex(headers, ["Buchungsnummer", "Booking ID", "BookingID", "ID"]);
 
+    const doorKeyIdx = findHeaderIndex(headers, ["DoorKey"]);
+    const guestsIdx = findHeaderIndex(headers, ["Personen"]);
+
     if (checkInIdx < 0 || checkOutIdx < 0) {
         throw new Error(
             `Required headers missing. Found: ${headers.join(", ")}. Need CheckIn/CheckOut.`
@@ -268,7 +282,9 @@ async function main() {
         checkInIdx,
         checkOutIdx,
         todayKey,
-        bookingRefIdx
+        bookingRefIdx,
+        doorKeyIdx,
+        guestsIdx
     );
 
     if (!action) {
