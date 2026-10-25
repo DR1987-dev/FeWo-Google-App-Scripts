@@ -864,9 +864,7 @@ function createLodgifyPaymentLink_(bookingId, amount) {
 
     Logger.log("===== CREATE PAYMENT LINK =====");
     Logger.log("URL: " + url);
-    Logger.log("Payload: " + payload);
     Logger.log("Status: " + response.getResponseCode());
-    Logger.log("Body: " + response.getContentText());
 
     const status = response.getResponseCode();
     const bodyText = response.getContentText() || "";

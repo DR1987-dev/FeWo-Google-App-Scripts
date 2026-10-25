@@ -110,27 +110,22 @@ function lodgifyRequest(path, options) {
     const url = lodgifyBuildUrl(path, requestOptions.queryParams);
     const response = UrlFetchApp.fetch(url, fetchOptions);
 
-// ===== DEBUG START =====
-Logger.log("===== LODGIFY REQUEST =====");
-Logger.log("URL: " + url);
-Logger.log("Status: " + response.getResponseCode());
+    // ===== DEBUG START =====
+    Logger.log("===== LODGIFY REQUEST =====");
+    Logger.log("URL: " + url);
+    Logger.log("Status: " + response.getResponseCode());
+    // ===== DEBUG END =====
 
-Logger.log("===== HEADERS =====");
-Logger.log(JSON.stringify(response.getAllHeaders(), null, 2));
 
-Logger.log("===== BODY =====");
-Logger.log(response.getContentText());
-// ===== DEBUG END =====
+    const status = response.getResponseCode();
+    const bodyText = response.getContentText() || "";
 
-const status = response.getResponseCode();
-const bodyText = response.getContentText() || "";
-
-let body;
-try {
-    body = bodyText ? JSON.parse(bodyText) : null;
-} catch (e) {
-    body = bodyText;
-}
+    let body;
+    try {
+        body = bodyText ? JSON.parse(bodyText) : null;
+    } catch (e) {
+        body = bodyText;
+    }
 
     if (status < 200 || status >= 300) {
         throw new Error(`Lodgify request failed (${status}) for ${url}: ${bodyText}`);
@@ -145,26 +140,20 @@ try {
 
 function lodgifyGetBookings(queryParams) {
 
-  const response = lodgifyRequest("/v2/reservations/bookings", {
-    method: "get",
-    queryParams: Object.assign({
-      page: 1,
-      size: 50,
-      includeCount: true,
-      stayFilter: "All",
-      includeTransactions: false,
-      includeExternal: true,
-      includeQuoteDetails: true
-    }, queryParams || {})
-  });
+    const response = lodgifyRequest("/v2/reservations/bookings", {
+        method: "get",
+        queryParams: Object.assign({
+            page: 1,
+            size: 50,
+            includeCount: true,
+            stayFilter: "All",
+            includeTransactions: false,
+            includeExternal: true,
+            includeQuoteDetails: true
+        }, queryParams || {})
+    });
 
-  Logger.log("========== REQUEST ==========");
-  Logger.log(JSON.stringify(queryParams || {}, null, 2));
-
-  Logger.log("========== RESPONSE ==========");
-  Logger.log(JSON.stringify(response.body, null, 2));
-
-  return response;
+    return response;
 }
 
 function lodgifyGetReservations(queryParams) {
