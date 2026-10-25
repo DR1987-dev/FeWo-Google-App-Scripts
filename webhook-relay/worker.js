@@ -118,11 +118,6 @@ export default {
 
         if (lodgifyMatch) {
             const event = lodgifyMatch[1];
-            console.log("Lodgify RAW event", JSON.stringify({
-                event,
-                headers: Object.fromEntries(request.headers),
-                rawBody,
-            }));
             if (!LODGIFY_EVENTS.includes(event)) return new Response("Not Found", { status: 404 });
             const secret = env[`LODGIFY_SECRET_${event.toUpperCase()}`];
             if (!(await verifyLodgifySignature(rawBody, request.headers.get("ms-signature"), secret))) {
